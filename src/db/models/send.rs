@@ -24,6 +24,8 @@ db_object! {
         pub password_hash: Option<Vec<u8>>,
         password_salt: Option<Vec<u8>>,
         password_iter: Option<i32>,
+        password_mem: Option<i32>,
+        password_para: Option<i32>,
 
         pub max_access_count: Option<i32>,
         pub access_count: i32,
@@ -62,6 +64,8 @@ impl Send {
             password_hash: None,
             password_salt: None,
             password_iter: None,
+            password_mem: None,
+            password_para: None,
 
             max_access_count: None,
             access_count: 0,
@@ -77,25 +81,44 @@ impl Send {
     }
 
     pub fn set_password(&mut self, password: Option<&str>) {
-        const PASSWORD_ITER: i32 = 100_000;
+        const PASSWORD_ITER: i32 = 2;
+        const PASSWORD_MEM: i32 = 1_048_576;
+        const PASSWORD_PARA: i32 = 8;
 
         if let Some(password) = password {
             self.password_iter = Some(PASSWORD_ITER);
+            self.password_mem = Some(PASSWORD_MEM);
+            self.password_para = Some(PASSWORD_PARA);
             let salt = crate::crypto::get_random_64();
-            let hash = crate::crypto::hash_password(password.as_bytes(), &salt, PASSWORD_ITER as u32);
+            let hash = crate::crypto::hash_password(
+                password.as_bytes(),
+                &salt,
+                PASSWORD_ITER as u32,
+                PASSWORD_MEM as u32,
+                PASSWORD_PARA as u32
+            );
             self.password_salt = Some(salt);
             self.password_hash = Some(hash);
         } else {
             self.password_iter = None;
+            self.password_mem = None;
+            self.password_para = None;
             self.password_salt = None;
             self.password_hash = None;
         }
     }
 
     pub fn check_password(&self, password: &str) -> bool {
-        match (&self.password_hash, &self.password_salt, self.password_iter) {
-            (Some(hash), Some(salt), Some(iter)) => {
-                crate::crypto::verify_password_hash(password.as_bytes(), salt, hash, iter as u32)
+        match (&self.password_hash, &self.password_salt, self.password_iter, self.password_mem, self.password_para) {
+            (Some(hash), Some(salt), Some(iter), Some(mem), Some(para)) => {
+                crate::crypto::verify_password_hash(
+                    password.as_bytes(),
+                    salt,
+                    hash,
+                    iter as u32,
+                    mem as u32,
+                    para as u32,
+                )
             }
             _ => false,
         }

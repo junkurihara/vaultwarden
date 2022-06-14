@@ -433,9 +433,15 @@ make_config! {
         invitations_allowed:    bool,   true,   def,    true;
         /// Allow emergency access |> Controls whether users can enable emergency access to their accounts. This setting applies globally to all users.
         emergency_access_allowed:    bool,   true,   def,    true;
-        /// Password iterations |> Number of server-side passwords hashing iterations.
+        /// Password iterations |> Number of server-side passwords hashing iterations in Argon2.
         /// The changes only apply when a user changes their password. Not recommended to lower the value
-        password_iterations:    i32,    true,   def,    100_000;
+        password_iterations:    i32,    true,   def,    2;
+        /// Password memory cost|> Argon2id memory cost in KiB.
+        /// The changes only apply when a user changes their password. Not recommended to lower the value
+        password_memory:        i32,    true,   def,    1_048_576;
+        /// Password hashing parallelism |> Argon2id parallelism level.
+        /// The changes only apply when a user changes their password. Not recommended to lower the value
+        password_parallelism:   i32,    true,   def,    8;
         /// Show password hint |> Controls whether a password hint should be shown directly in the web page
         /// if SMTP service is not configured. Not recommended for publicly-accessible instances as this
         /// provides unauthenticated access to potentially sensitive data.

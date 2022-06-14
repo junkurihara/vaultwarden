@@ -26,6 +26,8 @@ db_object! {
         pub password_hash: Vec<u8>,
         pub salt: Vec<u8>,
         pub password_iterations: i32,
+        pub password_parallelism: i32,
+        pub password_memory: i32,
         pub password_hint: Option<String>,
 
         pub akey: String,
@@ -95,6 +97,8 @@ impl User {
             password_hash: Vec::new(),
             salt: crypto::get_random_64(),
             password_iterations: CONFIG.password_iterations(),
+            password_parallelism: CONFIG.password_parallelism(),
+            password_memory: CONFIG.password_memory(),
 
             security_stamp: crate::util::get_uuid(),
             stamp_exception: None,
@@ -122,6 +126,8 @@ impl User {
             &self.salt,
             &self.password_hash,
             self.password_iterations as u32,
+            self.password_memory as u32,
+            self.password_parallelism as u32,
         )
     }
 
@@ -148,7 +154,18 @@ impl User {
     ///                       After these 2 minutes this stamp will expire.
     ///
     pub fn set_password(&mut self, password: &str, allow_next_route: Option<Vec<String>>) {
-        self.password_hash = crypto::hash_password(password.as_bytes(), &self.salt, self.password_iterations as u32);
+        // workaround for migration from pbkdf2 to argon2
+        self.password_iterations = CONFIG.password_iterations();
+        self.password_memory = CONFIG.password_memory();
+        self.password_parallelism = CONFIG.password_parallelism();
+
+        self.password_hash = crypto::hash_password(
+            password.as_bytes(),
+            &self.salt,
+            self.password_iterations as u32,
+            self.password_memory as u32,
+            self.password_parallelism as u32
+        );
 
         if let Some(route) = allow_next_route {
             self.set_stamp_exception(route);

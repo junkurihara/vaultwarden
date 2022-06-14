@@ -5,22 +5,70 @@ use std::num::NonZeroU32;
 
 use data_encoding::HEXLOWER;
 use ring::{digest, hmac, pbkdf2};
+use argon2::{Config, ThreadMode, Variant, Version};
 
-static DIGEST_ALG: pbkdf2::Algorithm = pbkdf2::PBKDF2_HMAC_SHA256;
+static LEGACY_PBKDF2_DIGEST_ALG: pbkdf2::Algorithm = pbkdf2::PBKDF2_HMAC_SHA256;
 const OUTPUT_LEN: usize = digest::SHA256_OUTPUT_LEN;
 
-pub fn hash_password(secret: &[u8], salt: &[u8], iterations: u32) -> Vec<u8> {
-    let mut out = vec![0u8; OUTPUT_LEN]; // Initialize array with zeros
-
-    let iterations = NonZeroU32::new(iterations).expect("Iterations can't be zero");
-    pbkdf2::derive(DIGEST_ALG, iterations, salt, secret, &mut out);
-
-    out
+fn get_argon2_config(iterations: u32, memory: u32, parallelism: u32) -> Config<'static> {
+    Config {
+        variant: Variant::Argon2id,
+        version: Version::Version13,
+        mem_cost: memory,
+        time_cost: iterations,
+        lanes: parallelism,
+        thread_mode: ThreadMode::Sequential,
+        secret: &[],
+        ad: &[],
+        hash_length: OUTPUT_LEN as u32,
+    }
 }
 
-pub fn verify_password_hash(secret: &[u8], salt: &[u8], previous: &[u8], iterations: u32) -> bool {
-    let iterations = NonZeroU32::new(iterations).expect("Iterations can't be zero");
-    pbkdf2::verify(DIGEST_ALG, iterations, salt, secret, previous).is_ok()
+pub fn hash_password(secret: &[u8], salt: &[u8], iterations: u32, memory: u32, parallelism: u32) -> Vec<u8> {
+    let iterations = NonZeroU32::new(iterations).expect("iterations must be non-zero");
+    // workaround for migration from pbkdf2 to argon2
+    if (memory, parallelism) == (0, 0) {
+        info!("set_password: using legacy PBKDF2");
+        let mut out = vec![0; OUTPUT_LEN];
+        pbkdf2::derive(
+            LEGACY_PBKDF2_DIGEST_ALG,
+            iterations,
+            salt,
+            secret,
+            &mut out
+        );
+        return out;
+    }
+    info!("set_password: using argon2");
+    let memory = NonZeroU32::new(memory).expect("memory must be non-zero");
+    let parallelism = NonZeroU32::new(parallelism).expect("parallelism must be non-zero");
+    let config = get_argon2_config(iterations.get(), memory.get(), parallelism.get());
+    argon2::hash_raw(secret, salt, &config).unwrap()
+}
+
+pub fn verify_password_hash(secret: &[u8], salt: &[u8], previous: &[u8], iterations: u32, memory:u32, parallelism: u32) -> bool {
+    let iterations = NonZeroU32::new(iterations).expect("iterations must be non-zero");
+    // workaround for migration from pbkdf2 to argon2
+    if (memory, parallelism) == (0, 0) {
+        info!("verify_password_hash: using legacy pbkdf2");
+        return pbkdf2::verify(
+            LEGACY_PBKDF2_DIGEST_ALG,
+            iterations,
+            salt,
+            secret,
+            previous,
+        ).is_ok();
+    }
+    info!("verify_password_hash: using argon2");
+    let memory = NonZeroU32::new(memory).expect("memory must be non-zero");
+    let parallelism = NonZeroU32::new(parallelism).expect("parallelism must be non-zero");
+    let config = get_argon2_config(iterations.get(), memory.get(), parallelism.get());
+    argon2::verify_raw(
+        secret,
+        salt,
+        previous,
+        &config
+    ).unwrap()
 }
 
 //

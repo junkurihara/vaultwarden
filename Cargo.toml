@@ -144,6 +144,7 @@ ctrlc = { version = "3.2.2", features = ["termination"] }
 # Allow overriding the default memory allocator
 # Mainly used for the musl builds, since the default musl malloc is very slow
 mimalloc = { version = "0.1.29", features = ["secure"], default-features = false, optional = true }
+rust-argon2 = "1.0.0"
 
 # Strip debuginfo from the release builds
 # Also enable thin LTO for some optimizations
