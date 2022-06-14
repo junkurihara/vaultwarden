@@ -438,10 +438,10 @@ make_config! {
         password_iterations:    i32,    true,   def,    2;
         /// Password memory cost|> Argon2id memory cost in KiB.
         /// The changes only apply when a user changes their password. Not recommended to lower the value
-        password_memory:        i32,    true,   def,    1_048_576;
+        password_memory:        i32,    true,   def,    131_072;
         /// Password hashing parallelism |> Argon2id parallelism level.
         /// The changes only apply when a user changes their password. Not recommended to lower the value
-        password_parallelism:   i32,    true,   def,    8;
+        password_parallelism:   i32,    true,   def,    4;
         /// Show password hint |> Controls whether a password hint should be shown directly in the web page
         /// if SMTP service is not configured. Not recommended for publicly-accessible instances as this
         /// provides unauthenticated access to potentially sensitive data.
