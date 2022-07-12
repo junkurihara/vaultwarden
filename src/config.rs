@@ -442,6 +442,8 @@ make_config! {
         /// Password hashing parallelism |> Argon2id parallelism level.
         /// The changes only apply when a user changes their password. Not recommended to lower the value
         password_parallelism:   i32,    true,   def,    4;
+        /// Allow password hints |> Controls whether users can set password hints. This setting applies globally to all users.
+        password_hints_allowed: bool,   true,   def,    true;
         /// Show password hint |> Controls whether a password hint should be shown directly in the web page
         /// if SMTP service is not configured. Not recommended for publicly-accessible instances as this
         /// provides unauthenticated access to potentially sensitive data.

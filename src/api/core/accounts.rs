@@ -62,6 +62,24 @@ struct KeysData {
     PublicKey: String,
 }
 
+/// Trims whitespace from password hints, and converts blank password hints to `None`.
+fn clean_password_hint(password_hint: &Option<String>) -> Option<String> {
+    match password_hint {
+        None => None,
+        Some(h) => match h.trim() {
+            "" => None,
+            ht => Some(ht.to_string()),
+        },
+    }
+}
+
+fn enforce_password_hint_setting(password_hint: &Option<String>) -> EmptyResult {
+    if password_hint.is_some() && !CONFIG.password_hints_allowed() {
+        err!("Password hints have been disabled by the administrator. Remove the hint and try again.");
+    }
+    Ok(())
+}
+
 #[post("/accounts/register", data = "<data>")]
 async fn register(data: JsonUpcase<RegisterData>, conn: DbConn) -> EmptyResult {
     let data: RegisterData = data.into_inner().data;
@@ -74,6 +92,11 @@ async fn register(data: JsonUpcase<RegisterData>, conn: DbConn) -> EmptyResult {
             err!("The field Name must be a string with a maximum length of 50.");
         }
     }
+
+    // Check against the password hint setting here so if it fails, the user
+    // can retry without losing their invitation below.
+    let password_hint = clean_password_hint(&data.MasterPasswordHint);
+    enforce_password_hint_setting(&password_hint)?;
 
     let mut user = match User::find_by_mail(&email, &conn).await {
         Some(user) => {
@@ -131,14 +154,11 @@ async fn register(data: JsonUpcase<RegisterData>, conn: DbConn) -> EmptyResult {
 
     user.set_password(&data.MasterPasswordHash, None);
     user.akey = data.Key;
+    user.password_hint = password_hint;
 
     // Add extra fields if present
     if let Some(name) = data.Name {
         user.name = name;
-    }
-
-    if let Some(hint) = data.MasterPasswordHint {
-        user.password_hint = Some(hint);
     }
 
     if let Some(keys) = data.Keys {
@@ -148,12 +168,12 @@ async fn register(data: JsonUpcase<RegisterData>, conn: DbConn) -> EmptyResult {
 
     if CONFIG.mail_enabled() {
         if CONFIG.signups_verify() {
-            if let Err(e) = mail::send_welcome_must_verify(&user.email, &user.uuid) {
+            if let Err(e) = mail::send_welcome_must_verify(&user.email, &user.uuid).await {
                 error!("Error sending welcome email: {:#?}", e);
             }
 
             user.last_verifying_at = Some(user.created_at);
-        } else if let Err(e) = mail::send_welcome(&user.email) {
+        } else if let Err(e) = mail::send_welcome(&user.email).await {
             error!("Error sending welcome email: {:#?}", e);
         }
     }
@@ -191,12 +211,10 @@ async fn post_profile(data: JsonUpcase<ProfileData>, headers: Headers, conn: DbC
     }
 
     let mut user = headers.user;
-
     user.name = data.Name;
-    user.password_hint = match data.MasterPasswordHint {
-        Some(ref h) if h.is_empty() => None,
-        _ => data.MasterPasswordHint,
-    };
+    user.password_hint = clean_password_hint(&data.MasterPasswordHint);
+    enforce_password_hint_setting(&user.password_hint)?;
+
     user.save(&conn).await?;
     Ok(Json(user.to_json(&conn).await))
 }
@@ -398,7 +416,7 @@ async fn post_email_token(data: JsonUpcase<EmailTokenData>, headers: Headers, co
     let token = crypto::generate_email_token(6);
 
     if CONFIG.mail_enabled() {
-        if let Err(e) = mail::send_change_email(&data.NewEmail, &token) {
+        if let Err(e) = mail::send_change_email(&data.NewEmail, &token).await {
             error!("Error sending change-email email: {:#?}", e);
         }
     }
@@ -467,14 +485,14 @@ async fn post_email(data: JsonUpcase<ChangeEmailData>, headers: Headers, conn: D
 }
 
 #[post("/accounts/verify-email")]
-fn post_verify_email(headers: Headers) -> EmptyResult {
+async fn post_verify_email(headers: Headers) -> EmptyResult {
     let user = headers.user;
 
     if !CONFIG.mail_enabled() {
         err!("Cannot verify email address");
     }
 
-    if let Err(e) = mail::send_verify_email(&user.email, &user.uuid) {
+    if let Err(e) = mail::send_verify_email(&user.email, &user.uuid).await {
         error!("Error sending verify_email email: {:#?}", e);
     }
 
@@ -526,7 +544,7 @@ async fn post_delete_recover(data: JsonUpcase<DeleteRecoverData>, conn: DbConn) 
 
     if CONFIG.mail_enabled() {
         if let Some(user) = User::find_by_mail(&data.Email, &conn).await {
-            if let Err(e) = mail::send_delete_account(&user.email, &user.uuid) {
+            if let Err(e) = mail::send_delete_account(&user.email, &user.uuid).await {
                 error!("Error sending delete account email: {:#?}", e);
             }
         }
@@ -626,7 +644,7 @@ async fn password_hint(data: JsonUpcase<PasswordHintData>, conn: DbConn) -> Empt
         Some(user) => {
             let hint: Option<String> = user.password_hint;
             if CONFIG.mail_enabled() {
-                mail::send_password_hint(email, hint)?;
+                mail::send_password_hint(email, hint).await?;
                 Ok(())
             } else if let Some(hint) = hint {
                 err!(format!("Your password hint is: {}", hint));
