@@ -22,6 +22,7 @@ pub use crate::api::{
     notifications::{start_notification_server, Notify, UpdateType},
     web::catchers as web_catchers,
     web::routes as web_routes,
+    web::static_files,
 };
 use crate::util;
 
@@ -32,6 +33,7 @@ pub type EmptyResult = ApiResult<()>;
 
 type JsonUpcase<T> = Json<util::UpCase<T>>;
 type JsonUpcaseVec<T> = Json<Vec<util::UpCase<T>>>;
+type JsonVec<T> = Json<Vec<T>>;
 
 // Common structs representing JSON data received
 #[derive(Deserialize)]
