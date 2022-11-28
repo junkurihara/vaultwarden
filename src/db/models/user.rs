@@ -95,7 +95,7 @@ impl User {
             email_new_token: None,
 
             password_hash: Vec::new(),
-            salt: crypto::get_random_64(),
+            salt: crypto::get_random_bytes::<64>().to_vec(),
             password_iterations: CONFIG.password_iterations(),
             password_parallelism: CONFIG.password_parallelism(),
             password_memory: CONFIG.password_memory(),

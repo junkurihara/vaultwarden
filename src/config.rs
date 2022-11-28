@@ -539,7 +539,7 @@ make_config! {
         database_conn_init:     String, false,  def,    String::new();
 
         /// Bypass admin page security (Know the risks!) |> Disables the Admin Token for the admin page so you may use your own auth in-front
-        disable_admin_token:    bool,   true,   def,    false;
+        disable_admin_token:    bool,   false,  def,    false;
 
         /// Allowed iframe ancestors (Know the risks!) |> Allows other domains to embed the web vault into an iframe, useful for embedding into secure intranets
         allowed_iframe_ancestors: String, true, def,    String::new();
@@ -549,9 +549,9 @@ make_config! {
         /// Max burst size for login requests |> Allow a burst of requests of up to this size, while maintaining the average indicated by `login_ratelimit_seconds`. Note that this applies to both the login and the 2FA, so it's recommended to allow a burst size of at least 2
         login_ratelimit_max_burst:     u32, false, def, 10;
 
-        /// Seconds between admin requests |> Number of seconds, on average, between admin requests from the same IP address before rate limiting kicks in
+        /// Seconds between admin login requests |> Number of seconds, on average, between admin requests from the same IP address before rate limiting kicks in
         admin_ratelimit_seconds:       u64, false, def, 300;
-        /// Max burst size for login requests |> Allow a burst of requests of up to this size, while maintaining the average indicated by `admin_ratelimit_seconds`
+        /// Max burst size for admin login requests |> Allow a burst of requests of up to this size, while maintaining the average indicated by `admin_ratelimit_seconds`
         admin_ratelimit_max_burst:     u32, false, def, 3;
     },
 
@@ -987,8 +987,7 @@ impl Config {
         if let Some(akey) = self._duo_akey() {
             akey
         } else {
-            let akey = crate::crypto::get_random_64();
-            let akey_s = data_encoding::BASE64.encode(&akey);
+            let akey_s = crate::crypto::encode_random_bytes::<64>(data_encoding::BASE64);
 
             // Save the new value
             let builder = ConfigBuilder {

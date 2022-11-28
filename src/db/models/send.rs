@@ -89,13 +89,13 @@ impl Send {
             self.password_iter = Some(PASSWORD_ITER);
             self.password_mem = Some(PASSWORD_MEM);
             self.password_para = Some(PASSWORD_PARA);
-            let salt = crate::crypto::get_random_64();
+            let salt = crate::crypto::get_random_bytes::<64>().to_vec();
             let hash = crate::crypto::hash_password(
                 password.as_bytes(),
                 &salt,
                 PASSWORD_ITER as u32,
                 PASSWORD_MEM as u32,
-                PASSWORD_PARA as u32
+                PASSWORD_PARA as u32,
             );
             self.password_salt = Some(salt);
             self.password_hash = Some(hash);
@@ -110,16 +110,14 @@ impl Send {
 
     pub fn check_password(&self, password: &str) -> bool {
         match (&self.password_hash, &self.password_salt, self.password_iter, self.password_mem, self.password_para) {
-            (Some(hash), Some(salt), Some(iter), Some(mem), Some(para)) => {
-                crate::crypto::verify_password_hash(
-                    password.as_bytes(),
-                    salt,
-                    hash,
-                    iter as u32,
-                    mem as u32,
-                    para as u32,
-                )
-            }
+            (Some(hash), Some(salt), Some(iter), Some(mem), Some(para)) => crate::crypto::verify_password_hash(
+                password.as_bytes(),
+                salt,
+                hash,
+                iter as u32,
+                mem as u32,
+                para as u32,
+            ),
             _ => false,
         }
     }
