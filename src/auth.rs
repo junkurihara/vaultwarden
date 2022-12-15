@@ -177,17 +177,17 @@ pub struct EmergencyAccessInviteJwtClaims {
     pub sub: String,
 
     pub email: String,
-    pub emer_id: Option<String>,
-    pub grantor_name: Option<String>,
-    pub grantor_email: Option<String>,
+    pub emer_id: String,
+    pub grantor_name: String,
+    pub grantor_email: String,
 }
 
 pub fn generate_emergency_access_invite_claims(
     uuid: String,
     email: String,
-    emer_id: Option<String>,
-    grantor_name: Option<String>,
-    grantor_email: Option<String>,
+    emer_id: String,
+    grantor_name: String,
+    grantor_email: String,
 ) -> EmergencyAccessInviteJwtClaims {
     let time_now = Utc::now().naive_utc();
     let expire_hours = i64::from(CONFIG.invitation_expiration_hours());
@@ -266,7 +266,7 @@ use rocket::{
 };
 
 use crate::db::{
-    models::{CollectionUser, Device, User, UserOrgStatus, UserOrgType, UserOrganization, UserStampException},
+    models::{Collection, Device, User, UserOrgStatus, UserOrgType, UserOrganization, UserStampException},
     DbConn,
 };
 
@@ -558,17 +558,15 @@ impl<'r> FromRequest<'r> for ManagerHeaders {
                         _ => err_handler!("Error getting DB"),
                     };
 
-                    if !headers.org_user.has_full_access() {
-                        match CollectionUser::find_by_collection_and_user(
+                    if !headers.org_user.has_full_access()
+                        && !Collection::has_access_by_collection_and_user_uuid(
                             &col_id,
                             &headers.org_user.user_uuid,
                             &mut conn,
                         )
                         .await
-                        {
-                            Some(_) => (),
-                            None => err_handler!("The current user isn't a manager for this collection"),
-                        }
+                    {
+                        err_handler!("The current user isn't a manager for this collection")
                     }
                 }
                 _ => err_handler!("Error getting the collection id"),

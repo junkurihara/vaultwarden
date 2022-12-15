@@ -381,7 +381,7 @@ impl User {
 }
 
 impl Invitation {
-    pub fn new(email: String) -> Self {
+    pub fn new(email: &str) -> Self {
         let email = email.to_lowercase();
         Self {
             email,

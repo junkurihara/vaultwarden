@@ -4,7 +4,7 @@
     <meta http-equiv="content-type" content="text/html; charset=UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" />
     <meta name="robots" content="noindex,nofollow" />
-    <link rel="icon" type="image/png" href="{{urlpath}}/vw_static/vaultwarden-icon.png">
+    <link rel="icon" type="image/png" href="{{urlpath}}/vw_static/vaultwarden-favicon.png">
     <title>Vaultwarden Admin Panel</title>
     <link rel="stylesheet" href="{{urlpath}}/vw_static/bootstrap.css" />
     <style>
@@ -28,11 +28,15 @@
             border: var(--bs-alert-border);
         }
     </style>
-    <script src="{{urlpath}}/vw_static/identicon.js"></script>
+    <script src="{{urlpath}}/vw_static/jdenticon.js"></script>
     <script>
         'use strict';
 
-        function reload() { window.location.reload(); }
+        function reload() {
+            // Reload the page by setting the exact same href
+            // Using window.location.reload() could cause a repost.
+            window.location = window.location.href;
+        }
         function msg(text, reload_page = true) {
             text && alert(text);
             reload_page && reload();
@@ -44,11 +48,6 @@
             const hashArray = Array.from(new Uint8Array(hashBuffer));
             const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
             return hashHex;
-        }
-        async function identicon(email) {
-            const hash = await sha256(email);
-            const data = new Identicon(hash, { size: 48, format: 'svg' });
-            return "data:image/svg+xml;base64," + data.toString();
         }
         function toggleVis(input_id) {
             const elem = document.getElementById(input_id);

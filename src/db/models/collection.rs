@@ -203,6 +203,17 @@ impl Collection {
         }}
     }
 
+    // Check if a user has access to a specific collection
+    // FIXME: This needs to be reviewed. The query used by `find_by_user_uuid` could be adjusted to filter when needed.
+    //        For now this is a good solution without making to much changes.
+    pub async fn has_access_by_collection_and_user_uuid(
+        collection_uuid: &str,
+        user_uuid: &str,
+        conn: &mut DbConn,
+    ) -> bool {
+        Self::find_by_user_uuid(user_uuid.to_owned(), conn).await.into_iter().any(|c| c.uuid == collection_uuid)
+    }
+
     pub async fn find_by_organization_and_user_uuid(org_uuid: &str, user_uuid: &str, conn: &mut DbConn) -> Vec<Self> {
         Self::find_by_user_uuid(user_uuid.to_owned(), conn)
             .await
@@ -246,11 +257,27 @@ impl Collection {
                     users_organizations::user_uuid.eq(user_uuid)
                 )
             ))
+            .left_join(groups_users::table.on(
+                groups_users::users_organizations_uuid.eq(users_organizations::uuid)
+            ))
+            .left_join(groups::table.on(
+                groups::uuid.eq(groups_users::groups_uuid)
+            ))
+            .left_join(collections_groups::table.on(
+                collections_groups::groups_uuid.eq(groups_users::groups_uuid).and(
+                    collections_groups::collections_uuid.eq(collections::uuid)
+                )
+            ))
             .filter(collections::uuid.eq(uuid))
             .filter(
                 users_collections::collection_uuid.eq(uuid).or( // Directly accessed collection
                     users_organizations::access_all.eq(true).or( // access_all in Organization
                         users_organizations::atype.le(UserOrgType::Admin as i32) // Org admin or owner
+                )).or(
+                    groups::access_all.eq(true) // access_all in groups
+                ).or( // access via groups
+                    groups_users::users_organizations_uuid.eq(users_organizations::uuid).and(
+                        collections_groups::collections_uuid.is_not_null()
                     )
                 )
             ).select(collections::all_columns)

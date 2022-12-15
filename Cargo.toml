@@ -24,6 +24,11 @@ vendored_openssl = ["openssl/vendored"]
 # Enable MiMalloc memory allocator to replace the default malloc
 # This can improve performance for Alpine builds
 enable_mimalloc = ["mimalloc"]
+# This is a development dependency, and should only be used during development!
+# It enables the usage of the diesel_logger crate, which is able to output the generated queries.
+# You also need to set an env variable `QUERY_LOGGER=1` to fully activate this so you do not have to re-compile
+# if you want to turn off the logging for a specific run.
+query_logger = ["diesel_logger"]
 
 # Enable unstable features, requires nightly
 # Currently only used to enable rusts official ip support
@@ -55,21 +60,22 @@ num-derive = "0.3.3"
 rocket = { version = "0.5.0-rc.2", features = ["tls", "json"], default-features = false }
 
 # WebSockets libraries
-tokio-tungstenite = "0.17.2"
+tokio-tungstenite = "0.18.0"
 rmpv = "1.0.0" # MessagePack library
 dashmap = "5.4.0"
 
 # Async futures
 futures = "0.3.25"
-tokio = { version = "1.21.2", features = ["rt-multi-thread", "fs", "io-util", "parking_lot", "time"] }
+tokio = { version = "1.23.0", features = ["rt-multi-thread", "fs", "io-util", "parking_lot", "time", "signal"] }
 
 # A generic serialization/deserialization framework
-serde = { version = "1.0.147", features = ["derive"] }
-serde_json = "1.0.87"
+serde = { version = "1.0.150", features = ["derive"] }
+serde_json = "1.0.89"
 
 # A safe, extensible ORM and Query builder
 diesel = { version = "2.0.2", features = ["chrono", "r2d2"] }
 diesel_migrations = "2.0.0"
+diesel_logger = { version = "0.2.0", optional = true }
 
 # Bundled SQLite
 libsqlite3-sys = { version = "0.25.2", features = ["bundled"], optional = true }
@@ -79,21 +85,21 @@ rand = { version = "0.8.5", features = ["small_rng"] }
 ring = "0.16.20"
 
 # UUID generation
-uuid = { version = "1.2.1", features = ["v4"] }
+uuid = { version = "1.2.2", features = ["v4"] }
 
 # Date and time libraries
-chrono = { version = "0.4.22", features = ["clock", "serde"], default-features = false }
-chrono-tz = "0.8.0"
+chrono = { version = "0.4.23", features = ["clock", "serde"], default-features = false }
+chrono-tz = "0.8.1"
 time = "0.3.17"
 
 # Job scheduler
-job_scheduler_ng = "2.0.2"
+job_scheduler_ng = "2.0.3"
 
 # Data encoding library Hex/Base32/Base64
-data-encoding = "2.3.2"
+data-encoding = "2.3.3"
 
 # JWT library
-jsonwebtoken = "8.1.1"
+jsonwebtoken = "8.2.0"
 
 # TOTP library
 totp-lite = "2.0.0"
@@ -116,13 +122,13 @@ email_address = "0.2.4"
 handlebars = { version = "4.3.5", features = ["dir_source"] }
 
 # HTTP client
-reqwest = { version = "0.11.12", features = ["stream", "json", "gzip", "brotli", "socks", "cookies", "trust-dns"] }
+reqwest = { version = "0.11.13", features = ["stream", "json", "gzip", "brotli", "socks", "cookies", "trust-dns"] }
 
 # For favicon extraction from main website
 html5gum = "0.5.2"
 regex = { version = "1.7.0", features = ["std", "perf", "unicode-perl"], default-features = false }
 data-url = "0.2.0"
-bytes = "1.2.1"
+bytes = "1.3.0"
 cached = "0.40.0"
 
 # Used for custom short lived cookie jar during favicon extraction
@@ -130,24 +136,21 @@ cookie = "0.16.1"
 cookie_store = "0.19.0"
 
 # Used by U2F, JWT and Postgres
-openssl = "0.10.42"
+openssl = "0.10.44"
 
 # CLI argument parsing
 pico-args = "0.5.0"
 
 # Macro ident concatenation
 paste = "1.0.9"
-governor = "0.5.0"
-
-# Capture CTRL+C
-ctrlc = { version = "3.2.3", features = ["termination"] }
+governor = "0.5.1"
 
 # Check client versions for specific features.
 semver = "1.0.14"
 
 # Allow overriding the default memory allocator
 # Mainly used for the musl builds, since the default musl malloc is very slow
-mimalloc = { version = "0.1.31", features = ["secure"], default-features = false, optional = true }
+mimalloc = { version = "0.1.32", features = ["secure"], default-features = false, optional = true }
 rust-argon2 = "1.0.0"
 
 [patch.crates-io]
