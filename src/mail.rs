@@ -88,7 +88,7 @@ fn mailer() -> AsyncSmtpTransport<Tokio1Executor> {
 }
 
 fn get_text(template_name: &'static str, data: serde_json::Value) -> Result<(String, String, String), Error> {
-    let (subject_html, body_html) = get_template(&format!("{}.html", template_name), &data)?;
+    let (subject_html, body_html) = get_template(&format!("{template_name}.html"), &data)?;
     let (_subject_text, body_text) = get_template(template_name, &data)?;
     Ok((subject_html, body_html, body_text))
 }
@@ -245,6 +245,7 @@ pub async fn send_invite(
             "org_id": org_id.as_deref().unwrap_or("_"),
             "org_user_id": org_user_id.as_deref().unwrap_or("_"),
             "email": percent_encode(address.as_bytes(), NON_ALPHANUMERIC).to_string(),
+            "org_name_encoded": percent_encode(org_name.as_bytes(), NON_ALPHANUMERIC).to_string(),
             "org_name": org_name,
             "token": invite_token,
         }),
@@ -530,27 +531,27 @@ async fn send_email(address: &str, subject: &str, body_html: String, body_text: 
         Err(e) => {
             if e.is_client() {
                 debug!("SMTP Client error: {:#?}", e);
-                err!(format!("SMTP Client error: {}", e));
+                err!(format!("SMTP Client error: {e}"));
             } else if e.is_transient() {
                 debug!("SMTP 4xx error: {:#?}", e);
-                err!(format!("SMTP 4xx error: {}", e));
+                err!(format!("SMTP 4xx error: {e}"));
             } else if e.is_permanent() {
                 debug!("SMTP 5xx error: {:#?}", e);
                 let mut msg = e.to_string();
                 // Add a special check for 535 to add a more descriptive message
                 if msg.contains("(535)") {
-                    msg = format!("{} - Authentication credentials invalid", msg);
+                    msg = format!("{msg} - Authentication credentials invalid");
                 }
-                err!(format!("SMTP 5xx error: {}", msg));
+                err!(format!("SMTP 5xx error: {msg}"));
             } else if e.is_timeout() {
                 debug!("SMTP timeout error: {:#?}", e);
-                err!(format!("SMTP timeout error: {}", e));
+                err!(format!("SMTP timeout error: {e}"));
             } else if e.is_tls() {
                 debug!("SMTP Encryption error: {:#?}", e);
-                err!(format!("SMTP Encryption error: {}", e));
+                err!(format!("SMTP Encryption error: {e}"));
             } else {
                 debug!("SMTP {:#?}", e);
-                err!(format!("SMTP {}", e));
+                err!(format!("SMTP {e}"));
             }
         }
     }

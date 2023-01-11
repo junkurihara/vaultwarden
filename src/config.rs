@@ -13,12 +13,12 @@ use crate::{
 
 static CONFIG_FILE: Lazy<String> = Lazy::new(|| {
     let data_folder = get_env("DATA_FOLDER").unwrap_or_else(|| String::from("data"));
-    get_env("CONFIG_FILE").unwrap_or_else(|| format!("{}/config.json", data_folder))
+    get_env("CONFIG_FILE").unwrap_or_else(|| format!("{data_folder}/config.json"))
 });
 
 pub static CONFIG: Lazy<Config> = Lazy::new(|| {
     Config::load().unwrap_or_else(|e| {
-        println!("Error loading config:\n\t{:?}\n", e);
+        println!("Error loading config:\n\t{e:?}\n");
         exit(12)
     })
 });
@@ -60,25 +60,37 @@ macro_rules! make_config {
         impl ConfigBuilder {
             #[allow(clippy::field_reassign_with_default)]
             fn from_env() -> Self {
-                match dotenvy::from_path(get_env("ENV_FILE").unwrap_or_else(|| String::from(".env"))) {
-                    Ok(_) => (),
+                let env_file = get_env("ENV_FILE").unwrap_or_else(|| String::from(".env"));
+                match dotenvy::from_path(&env_file) {
+                    Ok(_) => {
+                        println!("[INFO] Using environment file `{env_file}` for configuration.\n");
+                    },
                     Err(e) => match e {
                         dotenvy::Error::LineParse(msg, pos) => {
-                            panic!("Error loading the .env file:\nNear {:?} on position {}\nPlease fix and restart!\n", msg, pos);
+                            println!("[ERROR] Failed parsing environment file: `{env_file}`\nNear {msg:?} on position {pos}\nPlease fix and restart!\n");
+                            exit(255);
                         },
                         dotenvy::Error::Io(ioerr) => match ioerr.kind() {
                             std::io::ErrorKind::NotFound => {
-                                println!("[INFO] No .env file found.\n");
+                                // Only exit if this environment variable is set, but the file was not found.
+                                // This prevents incorrectly configured environments.
+                                if let Some(env_file) = get_env::<String>("ENV_FILE") {
+                                    println!("[ERROR] The configured ENV_FILE `{env_file}` was not found!\n");
+                                    exit(255);
+                                }
                             },
                             std::io::ErrorKind::PermissionDenied => {
-                                println!("[WARNING] Permission Denied while trying to read the .env file!\n");
+                                println!("[ERROR] Permission denied while trying to read environment file `{env_file}`!\n");
+                                exit(255);
                             },
                             _ => {
-                                println!("[WARNING] Reading the .env file failed:\n{:?}\n", ioerr);
+                                println!("[ERROR] Reading environment file `{env_file}` failed:\n{ioerr:?}\n");
+                                exit(255);
                             }
                         },
                         _ => {
-                            println!("[WARNING] Reading the .env file failed:\n{:?}\n", e);
+                            println!("[ERROR] Reading environment file `{env_file}` failed:\n{e:?}\n");
+                            exit(255);
                         }
                     }
                 };
@@ -93,6 +105,7 @@ macro_rules! make_config {
 
             fn from_file(path: &str) -> Result<Self, Error> {
                 let config_str = std::fs::read_to_string(path)?;
+                println!("[INFO] Using saved config from `{path}` for configuration.\n");
                 serde_json::from_str(&config_str).map_err(Into::into)
             }
 
@@ -112,8 +125,8 @@ macro_rules! make_config {
 
                 if show_overrides && !overrides.is_empty() {
                     // We can't use warn! here because logging isn't setup yet.
-                    println!("[WARNING] The following environment variables are being overriden by the config file,");
-                    println!("[WARNING] please use the admin panel to make changes to them:");
+                    println!("[WARNING] The following environment variables are being overriden by the config.json file.");
+                    println!("[WARNING] Please use the admin panel to make changes to them:");
                     println!("[WARNING] {}\n", overrides.join(", "));
                 }
 
@@ -668,7 +681,13 @@ fn validate_config(cfg: &ConfigItems) -> Result<(), Error> {
 
     let limit = 256;
     if cfg.database_max_conns < 1 || cfg.database_max_conns > limit {
-        err!(format!("`DATABASE_MAX_CONNS` contains an invalid value. Ensure it is between 1 and {}.", limit,));
+        err!(format!("`DATABASE_MAX_CONNS` contains an invalid value. Ensure it is between 1 and {limit}.",));
+    }
+
+    if let Some(log_file) = &cfg.log_file {
+        if std::fs::OpenOptions::new().append(true).create(true).open(log_file).is_err() {
+            err!("Unable to write to log file", log_file);
+        }
     }
 
     let dom = cfg.domain.to_lowercase();
@@ -704,8 +723,17 @@ fn validate_config(cfg: &ConfigItems) -> Result<(), Error> {
         err!("All Duo options need to be set for global Duo support")
     }
 
-    if cfg._enable_yubico && cfg.yubico_client_id.is_some() != cfg.yubico_secret_key.is_some() {
-        err!("Both `YUBICO_CLIENT_ID` and `YUBICO_SECRET_KEY` need to be set for Yubikey OTP support")
+    if cfg._enable_yubico {
+        if cfg.yubico_client_id.is_some() != cfg.yubico_secret_key.is_some() {
+            err!("Both `YUBICO_CLIENT_ID` and `YUBICO_SECRET_KEY` must be set for Yubikey OTP support")
+        }
+
+        if let Some(yubico_server) = &cfg.yubico_server {
+            let yubico_server = yubico_server.to_lowercase();
+            if !yubico_server.starts_with("https://") {
+                err!("`YUBICO_SERVER` must be a valid URL and start with 'https://'. Either unset this variable or provide a valid URL.")
+            }
+        }
     }
 
     if cfg._enable_smtp {
@@ -742,7 +770,7 @@ fn validate_config(cfg: &ConfigItems) -> Result<(), Error> {
         let validate_regex = regex::Regex::new(r);
         match validate_regex {
             Ok(_) => (),
-            Err(e) => err!(format!("`ICON_BLACKLIST_REGEX` is invalid: {:#?}", e)),
+            Err(e) => err!(format!("`ICON_BLACKLIST_REGEX` is invalid: {e:#?}")),
         }
     }
 
@@ -752,12 +780,12 @@ fn validate_config(cfg: &ConfigItems) -> Result<(), Error> {
         "internal" | "bitwarden" | "duckduckgo" | "google" => (),
         _ => {
             if !icon_service.starts_with("http") {
-                err!(format!("Icon service URL `{}` must start with \"http\"", icon_service))
+                err!(format!("Icon service URL `{icon_service}` must start with \"http\""))
             }
             match icon_service.matches("{}").count() {
                 1 => (), // nominal
-                0 => err!(format!("Icon service URL `{}` has no placeholder \"{{}}\"", icon_service)),
-                _ => err!(format!("Icon service URL `{}` has more than one placeholder \"{{}}\"", icon_service)),
+                0 => err!(format!("Icon service URL `{icon_service}` has no placeholder \"{{}}\"")),
+                _ => err!(format!("Icon service URL `{icon_service}` has more than one placeholder \"{{}}\"")),
             }
         }
     }
@@ -809,7 +837,7 @@ fn extract_url_origin(url: &str) -> String {
     match Url::parse(url) {
         Ok(u) => u.origin().ascii_serialization(),
         Err(e) => {
-            println!("Error validating domain: {}", e);
+            println!("Error validating domain: {e}");
             String::new()
         }
     }
@@ -1092,6 +1120,7 @@ where
     // Register helpers
     hb.register_helper("case", Box::new(case_helper));
     hb.register_helper("jsesc", Box::new(js_escape_helper));
+    hb.register_helper("to_json", Box::new(to_json));
 
     macro_rules! reg {
         ($name:expr) => {{
@@ -1183,9 +1212,23 @@ fn js_escape_helper<'reg, 'rc>(
 
     let mut escaped_value = value.replace('\\', "").replace('\'', "\\x22").replace('\"', "\\x27");
     if !no_quote {
-        escaped_value = format!("&quot;{}&quot;", escaped_value);
+        escaped_value = format!("&quot;{escaped_value}&quot;");
     }
 
     out.write(&escaped_value)?;
+    Ok(())
+}
+
+fn to_json<'reg, 'rc>(
+    h: &Helper<'reg, 'rc>,
+    _r: &'reg Handlebars<'_>,
+    _ctx: &'rc Context,
+    _rc: &mut RenderContext<'reg, 'rc>,
+    out: &mut dyn Output,
+) -> HelperResult {
+    let param = h.param(0).ok_or_else(|| RenderError::new("Expected 1 parameter for \"to_json\""))?.value();
+    let json = serde_json::to_string(param)
+        .map_err(|e| RenderError::new(format!("Can't serialize parameter to JSON: {}", e)))?;
+    out.write(&json)?;
     Ok(())
 }

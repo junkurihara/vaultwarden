@@ -228,19 +228,6 @@ async fn post_send_file(data: Form<UploadData<'_>>, headers: Headers, mut conn: 
         err!("Send content is not a file");
     }
 
-    // There is a bug regarding uploading attachments/sends using the Mobile clients
-    // See: https://github.com/dani-garcia/vaultwarden/issues/2644 && https://github.com/bitwarden/mobile/issues/2018
-    // This has been fixed via a PR: https://github.com/bitwarden/mobile/pull/2031, but hasn't landed in a new release yet.
-    // On the vaultwarden side this is temporarily fixed by using a custom multer library
-    // See: https://github.com/dani-garcia/vaultwarden/pull/2675
-    // In any case we will match TempFile::File and not TempFile::Buffered, since Buffered will alter the contents.
-    if let TempFile::Buffered {
-        content: _,
-    } = &data
-    {
-        err!("Error reading send file data. Please try an other client.");
-    }
-
     let size = data.len();
     if size > size_limit {
         err!("Attachment storage limit exceeded with this file");
@@ -339,19 +326,6 @@ async fn post_send_file_v2_data(
 
     let mut data = data.into_inner();
 
-    // There is a bug regarding uploading attachments/sends using the Mobile clients
-    // See: https://github.com/dani-garcia/vaultwarden/issues/2644 && https://github.com/bitwarden/mobile/issues/2018
-    // This has been fixed via a PR: https://github.com/bitwarden/mobile/pull/2031, but hasn't landed in a new release yet.
-    // On the vaultwarden side this is temporarily fixed by using a custom multer library
-    // See: https://github.com/dani-garcia/vaultwarden/pull/2675
-    // In any case we will match TempFile::File and not TempFile::Buffered, since Buffered will alter the contents.
-    if let TempFile::Buffered {
-        content: _,
-    } = &data.data
-    {
-        err!("Error reading attachment data. Please try an other client.");
-    }
-
     if let Some(send) = Send::find_by_uuid(&send_uuid, &mut conn).await {
         let folder_path = tokio::fs::canonicalize(&CONFIG.sends_folder()).await?.join(&send_uuid);
         let file_path = folder_path.join(&file_id);
@@ -381,6 +355,7 @@ async fn post_access(
     data: JsonUpcase<SendAccessData>,
     mut conn: DbConn,
     ip: ClientIp,
+    nt: Notify<'_>,
 ) -> JsonResult {
     let mut send = match Send::find_by_access_id(&access_id, &mut conn).await {
         Some(s) => s,
@@ -422,6 +397,8 @@ async fn post_access(
 
     send.save(&mut conn).await?;
 
+    nt.send_send_update(UpdateType::SyncSendUpdate, &send, &send.update_users_revision(&mut conn).await).await;
+
     Ok(Json(send.to_json_access(&mut conn).await))
 }
 
@@ -432,6 +409,7 @@ async fn post_access_file(
     data: JsonUpcase<SendAccessData>,
     host: Host,
     mut conn: DbConn,
+    nt: Notify<'_>,
 ) -> JsonResult {
     let mut send = match Send::find_by_uuid(&send_id, &mut conn).await {
         Some(s) => s,
@@ -470,6 +448,8 @@ async fn post_access_file(
 
     send.save(&mut conn).await?;
 
+    nt.send_send_update(UpdateType::SyncSendUpdate, &send, &send.update_users_revision(&mut conn).await).await;
+
     let token_claims = crate::auth::generate_send_claims(&send_id, &file_id);
     let token = crate::auth::encode_jwt(&token_claims);
     Ok(Json(json!({
@@ -482,7 +462,7 @@ async fn post_access_file(
 #[get("/sends/<send_id>/<file_id>?<t>")]
 async fn download_send(send_id: SafeString, file_id: SafeString, t: String) -> Option<NamedFile> {
     if let Ok(claims) = crate::auth::decode_send(&t) {
-        if claims.sub == format!("{}/{}", send_id, file_id) {
+        if claims.sub == format!("{send_id}/{file_id}") {
             return NamedFile::open(Path::new(&CONFIG.sends_folder()).join(send_id).join(file_id)).await.ok();
         }
     }

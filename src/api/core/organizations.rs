@@ -713,7 +713,7 @@ async fn send_invite(
         let user = match User::find_by_mail(&email, &mut conn).await {
             None => {
                 if !CONFIG.invitations_allowed() {
-                    err!(format!("User does not exist: {}", email))
+                    err!(format!("User does not exist: {email}"))
                 }
 
                 if !CONFIG.is_email_domain_allowed(&email) {
@@ -731,7 +731,7 @@ async fn send_invite(
             }
             Some(user) => {
                 if UserOrganization::find_by_user_and_org(&user.uuid, &org_id, &mut conn).await.is_some() {
-                    err!(format!("User already in organization: {}", email))
+                    err!(format!("User already in organization: {email}"))
                 } else {
                     // automatically accept existing users if mail is disabled
                     if !CONFIG.mail_enabled() && !user.password_hash.is_empty() {
@@ -808,7 +808,7 @@ async fn bulk_reinvite_user(
     for org_user_id in data.Ids {
         let err_msg = match _reinvite_user(&org_id, &org_user_id, &headers.user.email, &mut conn).await {
             Ok(_) => String::new(),
-            Err(e) => format!("{:?}", e),
+            Err(e) => format!("{e:?}"),
         };
 
         bulk_response.push(json!(
@@ -957,6 +957,7 @@ async fn bulk_confirm_invite(
     headers: AdminHeaders,
     mut conn: DbConn,
     ip: ClientIp,
+    nt: Notify<'_>,
 ) -> Json<Value> {
     let data = data.into_inner().data;
 
@@ -966,9 +967,10 @@ async fn bulk_confirm_invite(
             for invite in keys {
                 let org_user_id = invite["Id"].as_str().unwrap_or_default();
                 let user_key = invite["Key"].as_str().unwrap_or_default();
-                let err_msg = match _confirm_invite(&org_id, org_user_id, user_key, &headers, &mut conn, &ip).await {
+                let err_msg = match _confirm_invite(&org_id, org_user_id, user_key, &headers, &mut conn, &ip, &nt).await
+                {
                     Ok(_) => String::new(),
-                    Err(e) => format!("{:?}", e),
+                    Err(e) => format!("{e:?}"),
                 };
 
                 bulk_response.push(json!(
@@ -998,10 +1000,11 @@ async fn confirm_invite(
     headers: AdminHeaders,
     mut conn: DbConn,
     ip: ClientIp,
+    nt: Notify<'_>,
 ) -> EmptyResult {
     let data = data.into_inner().data;
     let user_key = data["Key"].as_str().unwrap_or_default();
-    _confirm_invite(&org_id, &org_user_id, user_key, &headers, &mut conn, &ip).await
+    _confirm_invite(&org_id, &org_user_id, user_key, &headers, &mut conn, &ip, &nt).await
 }
 
 async fn _confirm_invite(
@@ -1011,6 +1014,7 @@ async fn _confirm_invite(
     headers: &AdminHeaders,
     conn: &mut DbConn,
     ip: &ClientIp,
+    nt: &Notify<'_>,
 ) -> EmptyResult {
     if key.is_empty() || org_user_id.is_empty() {
         err!("Key or UserId is not set, unable to process request");
@@ -1069,7 +1073,13 @@ async fn _confirm_invite(
         mail::send_invite_confirmed(&address, &org_name).await?;
     }
 
-    user_to_confirm.save(conn).await
+    let save_result = user_to_confirm.save(conn).await;
+
+    if let Some(user) = User::find_by_uuid(&user_to_confirm.user_uuid, conn).await {
+        nt.send_user_update(UpdateType::SyncOrgKeys, &user).await;
+    }
+
+    save_result
 }
 
 #[get("/organizations/<org_id>/users/<org_user_id>")]
@@ -1206,14 +1216,15 @@ async fn bulk_delete_user(
     headers: AdminHeaders,
     mut conn: DbConn,
     ip: ClientIp,
+    nt: Notify<'_>,
 ) -> Json<Value> {
     let data: OrgBulkIds = data.into_inner().data;
 
     let mut bulk_response = Vec::new();
     for org_user_id in data.Ids {
-        let err_msg = match _delete_user(&org_id, &org_user_id, &headers, &mut conn, &ip).await {
+        let err_msg = match _delete_user(&org_id, &org_user_id, &headers, &mut conn, &ip, &nt).await {
             Ok(_) => String::new(),
-            Err(e) => format!("{:?}", e),
+            Err(e) => format!("{e:?}"),
         };
 
         bulk_response.push(json!(
@@ -1239,8 +1250,9 @@ async fn delete_user(
     headers: AdminHeaders,
     mut conn: DbConn,
     ip: ClientIp,
+    nt: Notify<'_>,
 ) -> EmptyResult {
-    _delete_user(&org_id, &org_user_id, &headers, &mut conn, &ip).await
+    _delete_user(&org_id, &org_user_id, &headers, &mut conn, &ip, &nt).await
 }
 
 #[post("/organizations/<org_id>/users/<org_user_id>/delete")]
@@ -1250,8 +1262,9 @@ async fn post_delete_user(
     headers: AdminHeaders,
     mut conn: DbConn,
     ip: ClientIp,
+    nt: Notify<'_>,
 ) -> EmptyResult {
-    _delete_user(&org_id, &org_user_id, &headers, &mut conn, &ip).await
+    _delete_user(&org_id, &org_user_id, &headers, &mut conn, &ip, &nt).await
 }
 
 async fn _delete_user(
@@ -1260,6 +1273,7 @@ async fn _delete_user(
     headers: &AdminHeaders,
     conn: &mut DbConn,
     ip: &ClientIp,
+    nt: &Notify<'_>,
 ) -> EmptyResult {
     let user_to_delete = match UserOrganization::find_by_uuid_and_org(org_user_id, org_id, conn).await {
         Some(user) => user,
@@ -1287,6 +1301,10 @@ async fn _delete_user(
         conn,
     )
     .await;
+
+    if let Some(user) = User::find_by_uuid(&user_to_delete.user_uuid, conn).await {
+        nt.send_user_update(UpdateType::SyncOrgKeys, &user).await;
+    }
 
     user_to_delete.delete(conn).await
 }
@@ -1359,6 +1377,12 @@ async fn post_org_import(
 ) -> EmptyResult {
     let data: ImportData = data.into_inner().data;
     let org_id = query.organization_id;
+
+    // Validate the import before continuing
+    // Bitwarden does not process the import if there is one item invalid.
+    // Since we check for the size of the encrypted note length, we need to do that here to pre-validate it.
+    // TODO: See if we can optimize the whole cipher adding/importing and prevent duplicate code and checks.
+    Cipher::validate_notes(&data.Ciphers)?;
 
     let mut collections = Vec::new();
     for coll in data.Collections {
@@ -1801,7 +1825,7 @@ async fn bulk_revoke_organization_user(
                 let org_user_id = org_user_id.as_str().unwrap_or_default();
                 let err_msg = match _revoke_organization_user(&org_id, org_user_id, &headers, &mut conn, &ip).await {
                     Ok(_) => String::new(),
-                    Err(e) => format!("{:?}", e),
+                    Err(e) => format!("{e:?}"),
                 };
 
                 bulk_response.push(json!(
@@ -1916,7 +1940,7 @@ async fn bulk_restore_organization_user(
                 let org_user_id = org_user_id.as_str().unwrap_or_default();
                 let err_msg = match _restore_organization_user(&org_id, org_user_id, &headers, &mut conn, &ip).await {
                     Ok(_) => String::new(),
-                    Err(e) => format!("{:?}", e),
+                    Err(e) => format!("{e:?}"),
                 };
 
                 bulk_response.push(json!(
