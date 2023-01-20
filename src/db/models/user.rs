@@ -48,6 +48,8 @@ db_object! {
         pub client_kdf_iter: i32,
 
         pub api_key: Option<String>,
+
+        pub avatar_color: Option<String>,
     }
 
     #[derive(Identifiable, Queryable, Insertable)]
@@ -117,6 +119,8 @@ impl User {
             client_kdf_iter: Self::CLIENT_KDF_ITER_DEFAULT,
 
             api_key: None,
+
+            avatar_color: None,
         }
     }
 
@@ -243,6 +247,7 @@ impl User {
             "Providers": [],
             "ProviderOrganizations": [],
             "ForcePasswordReset": false,
+            "AvatarColor": self.avatar_color,
             "Object": "profile",
         })
     }

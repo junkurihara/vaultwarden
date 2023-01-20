@@ -6,19 +6,19 @@
 {% set build_stage_base_image = "rust:1.66-bullseye" %}
 {% if "alpine" in target_file %}
 {%   if "amd64" in target_file %}
-{%     set build_stage_base_image = "blackdex/rust-musl:x86_64-musl-stable-1.66.0" %}
+{%     set build_stage_base_image = "blackdex/rust-musl:x86_64-musl-stable-1.66.1" %}
 {%     set runtime_stage_base_image = "alpine:3.17" %}
 {%     set package_arch_target = "x86_64-unknown-linux-musl" %}
 {%   elif "armv7" in target_file %}
-{%     set build_stage_base_image = "blackdex/rust-musl:armv7-musleabihf-stable-1.66.0" %}
+{%     set build_stage_base_image = "blackdex/rust-musl:armv7-musleabihf-stable-1.66.1" %}
 {%     set runtime_stage_base_image = "balenalib/armv7hf-alpine:3.17" %}
 {%     set package_arch_target = "armv7-unknown-linux-musleabihf" %}
 {%   elif "armv6" in target_file %}
-{%     set build_stage_base_image = "blackdex/rust-musl:arm-musleabi-stable-1.66.0" %}
+{%     set build_stage_base_image = "blackdex/rust-musl:arm-musleabi-stable-1.66.1" %}
 {%     set runtime_stage_base_image = "balenalib/rpi-alpine:3.17" %}
 {%     set package_arch_target = "arm-unknown-linux-musleabi" %}
 {%   elif "arm64" in target_file %}
-{%     set build_stage_base_image = "blackdex/rust-musl:aarch64-musl-stable-1.66.0" %}
+{%     set build_stage_base_image = "blackdex/rust-musl:aarch64-musl-stable-1.66.1" %}
 {%     set runtime_stage_base_image = "balenalib/aarch64-alpine:3.17" %}
 {%     set package_arch_target = "aarch64-unknown-linux-musl" %}
 {%   endif %}
@@ -59,8 +59,8 @@
 # 	https://docs.docker.com/develop/develop-images/multistage-build/
 # 	https://whitfin.io/speeding-up-rust-docker-builds/
 ####################### VAULT BUILD IMAGE  #######################
-{% set vault_version = "v2022.12.0" %}
-{% set vault_image_digest = "sha256:068ac863d52a5626568ae3c7f93a509f87c76b1b15821b101f2707724df9da3e" %}
+{% set vault_version = "v2023.1.0" %}
+{% set vault_image_digest = "sha256:c95973cf3b8bf3dee2d751a9ccd5a8dbde5442ae52b38824b660bc2e8538df4f" %}
 # The web-vault digest specifies a particular web-vault build on Docker Hub.
 # Using the digest instead of the tag name provides better security,
 # as the digest of an image is immutable, whereas a tag name can later
