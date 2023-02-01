@@ -679,9 +679,9 @@ fn validate_config(cfg: &ConfigItems) -> Result<(), Error> {
         }
     }
 
-    // if cfg.password_iterations < 100_000 {
-    //     err!("PASSWORD_ITERATIONS should be at least 100000 or higher. The default is 600000!");
-    // }
+    if cfg.password_iterations < 2 {
+        err!("PASSWORD_ITERATIONS in Argon 2should be at least 2 or higher. The default is 4!");
+    }
 
     let limit = 256;
     if cfg.database_max_conns < 1 || cfg.database_max_conns > limit {
