@@ -76,7 +76,7 @@ pub struct UserStampException {
 /// Local methods
 impl User {
     pub const CLIENT_KDF_TYPE_DEFAULT: i32 = 0; // PBKDF2: 0
-    pub const CLIENT_KDF_ITER_DEFAULT: i32 = 100_000;
+    pub const CLIENT_KDF_ITER_DEFAULT: i32 = 600_000;
 
     pub fn new(email: String) -> Self {
         let now = Utc::now().naive_utc();
@@ -153,11 +153,18 @@ impl User {
     /// # Arguments
     ///
     /// * `password` - A str which contains a hashed version of the users master password.
+    /// * `new_key` - A String  which contains the new aKey value of the users master password.
     /// * `allow_next_route` - A Option<Vec<String>> with the function names of the next allowed (rocket) routes.
     ///                       These routes are able to use the previous stamp id for the next 2 minutes.
     ///                       After these 2 minutes this stamp will expire.
     ///
-    pub fn set_password(&mut self, password: &str, allow_next_route: Option<Vec<String>>) {
+    pub fn set_password(
+        &mut self,
+        password: &str,
+        new_key: Option<String>,
+        reset_security_stamp: bool,
+        allow_next_route: Option<Vec<String>>,
+    ) {
         // workaround for migration from pbkdf2 to argon2
         self.password_iterations = CONFIG.password_iterations();
         self.password_memory = CONFIG.password_memory();
@@ -168,14 +175,20 @@ impl User {
             &self.salt,
             self.password_iterations as u32,
             self.password_memory as u32,
-            self.password_parallelism as u32
+            self.password_parallelism as u32,
         );
 
         if let Some(route) = allow_next_route {
             self.set_stamp_exception(route);
         }
 
-        self.reset_security_stamp()
+        if let Some(new_key) = new_key {
+            self.akey = new_key;
+        }
+
+        if reset_security_stamp {
+            self.reset_security_stamp()
+        }
     }
 
     pub fn reset_security_stamp(&mut self) {
