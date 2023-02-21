@@ -123,7 +123,9 @@ async fn post_emergency_access(
 
     emergency_access.atype = new_type;
     emergency_access.wait_time_days = data.WaitTimeDays;
-    emergency_access.key_encrypted = data.KeyEncrypted;
+    if data.KeyEncrypted.is_some() {
+        emergency_access.key_encrypted = data.KeyEncrypted;
+    }
 
     emergency_access.save(&mut conn).await?;
     Ok(Json(emergency_access.to_json()))
@@ -618,12 +620,22 @@ async fn takeover_emergency_access(emer_id: String, headers: Headers, mut conn: 
         None => err!("Grantor user not found."),
     };
 
-    Ok(Json(json!({
-      "Kdf": grantor_user.client_kdf_type,
-      "KdfIterations": grantor_user.client_kdf_iter,
-      "KeyEncrypted": &emergency_access.key_encrypted,
-      "Object": "emergencyAccessTakeover",
-    })))
+    let mut result = json!({
+        "Kdf": grantor_user.client_kdf_type,
+        "KdfIterations": grantor_user.client_kdf_iter,
+        "KeyEncrypted": &emergency_access.key_encrypted,
+        "Object": "emergencyAccessTakeover",
+    });
+
+    if grantor_user.client_kdf_type == UserKdfType::Argon2id as i32 {
+        result["KdfMemory"] =
+            Value::Number(grantor_user.client_kdf_memory.expect("Argon2 memory parameter is required.").into());
+        result["KdfParallelism"] = Value::Number(
+            grantor_user.client_kdf_parallelism.expect("Argon2 parallelism parameter is required.").into(),
+        );
+    }
+
+    Ok(Json(result))
 }
 
 #[derive(Deserialize)]
