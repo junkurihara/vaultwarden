@@ -26,6 +26,7 @@ pub fn routes() -> Vec<Route> {
         leave_organization,
         get_user_collections,
         get_org_collections,
+        get_org_collections_details,
         get_org_collection_detail,
         get_collection_users,
         put_collection_users,
@@ -304,6 +305,32 @@ async fn get_user_collections(headers: Headers, mut conn: DbConn) -> Json<Value>
 async fn get_org_collections(org_id: String, _headers: ManagerHeadersLoose, mut conn: DbConn) -> Json<Value> {
     Json(json!({
         "Data": _get_org_collections(&org_id, &mut conn).await,
+        "Object": "list",
+        "ContinuationToken": null,
+    }))
+}
+
+#[get("/organizations/<org_id>/collections/details")]
+async fn get_org_collections_details(org_id: String, _headers: ManagerHeadersLoose, mut conn: DbConn) -> Json<Value> {
+    let mut data = Vec::new();
+
+    for col in Collection::find_by_organization(&org_id, &mut conn).await {
+        let groups: Vec<Value> = CollectionGroup::find_by_collection(&col.uuid, &mut conn)
+            .await
+            .iter()
+            .map(|collection_group| {
+                SelectionReadOnly::to_collection_group_details_read_only(collection_group).to_json()
+            })
+            .collect();
+
+        let mut json_object = col.to_json();
+        json_object["Groups"] = json!(groups);
+        json_object["Object"] = json!("collectionGroupDetails");
+        data.push(json_object)
+    }
+
+    Json(json!({
+        "Data": data,
         "Object": "list",
         "ContinuationToken": null,
     }))
@@ -2029,11 +2056,13 @@ async fn _restore_organization_user(
 
 #[get("/organizations/<org_id>/groups")]
 async fn get_groups(org_id: String, _headers: ManagerHeadersLoose, mut conn: DbConn) -> JsonResult {
-    if !CONFIG.org_groups_enabled() {
-        err!("Group support is disabled");
-    }
-
-    let groups = Group::find_by_organization(&org_id, &mut conn).await.iter().map(Group::to_json).collect::<Value>();
+    let groups = if CONFIG.org_groups_enabled() {
+        Group::find_by_organization(&org_id, &mut conn).await.iter().map(Group::to_json).collect::<Value>()
+    } else {
+        // The Bitwarden clients seem to call this API regardless of whether groups are enabled,
+        // so just act as if there are no groups.
+        Value::Array(Vec::new())
+    };
 
     Ok(Json(json!({
         "Data": groups,

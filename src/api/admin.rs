@@ -33,6 +33,7 @@ pub fn routes() -> Vec<Route> {
     routes![
         get_users_json,
         get_user_json,
+        get_user_by_mail_json,
         post_admin_login,
         admin_page,
         invite_user,
@@ -183,7 +184,7 @@ fn post_admin_login(data: Form<LoginForm>, cookies: &CookieJar<'_>, ip: ClientIp
 
         let cookie = Cookie::build(COOKIE_NAME, jwt)
             .path(admin_path())
-            .max_age(rocket::time::Duration::minutes(20))
+            .max_age(rocket::time::Duration::minutes(CONFIG.admin_session_lifetime()))
             .same_site(SameSite::Strict)
             .http_only(true)
             .finish();
@@ -329,6 +330,18 @@ async fn users_overview(_token: AdminToken, mut conn: DbConn) -> ApiResult<Html<
 
     let text = AdminTemplateData::new("admin/users", json!(users_json)).render()?;
     Ok(Html(text))
+}
+
+#[get("/users/by-mail/<mail>")]
+async fn get_user_by_mail_json(mail: String, _token: AdminToken, mut conn: DbConn) -> JsonResult {
+    if let Some(u) = User::find_by_mail(&mail, &mut conn).await {
+        let mut usr = u.to_json(&mut conn).await;
+        usr["UserEnabled"] = json!(u.enabled);
+        usr["CreatedAt"] = json!(format_naive_datetime_local(&u.created_at, DT_FMT));
+        Ok(Json(usr))
+    } else {
+        err_code!("User doesn't exist", Status::NotFound.code);
+    }
 }
 
 #[get("/users/<uuid>")]
