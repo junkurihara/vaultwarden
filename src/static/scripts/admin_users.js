@@ -28,28 +28,36 @@ function remove2fa(event) {
     event.preventDefault();
     event.stopPropagation();
     const id = event.target.parentNode.dataset.vwUserUuid;
-    if (!id) {
+    const email = event.target.parentNode.dataset.vwUserEmail;
+    if (!id || !email) {
         alert("Required parameters not found!");
         return false;
     }
-    _post(`${BASE_URL}/admin/users/${id}/remove-2fa`,
-        "2FA removed correctly",
-        "Error removing 2FA"
-    );
+    const confirmed = confirm(`Are you sure you want to remove 2FA for "${email}"?`);
+    if (confirmed) {
+        _post(`${BASE_URL}/admin/users/${id}/remove-2fa`,
+            "2FA removed correctly",
+            "Error removing 2FA"
+        );
+    }
 }
 
 function deauthUser(event) {
     event.preventDefault();
     event.stopPropagation();
     const id = event.target.parentNode.dataset.vwUserUuid;
-    if (!id) {
+    const email = event.target.parentNode.dataset.vwUserEmail;
+    if (!id || !email) {
         alert("Required parameters not found!");
         return false;
     }
-    _post(`${BASE_URL}/admin/users/${id}/deauth`,
-        "Sessions deauthorized correctly",
-        "Error deauthorizing sessions"
-    );
+    const confirmed = confirm(`Are you sure you want to deauthorize sessions for "${email}"?`);
+    if (confirmed) {
+        _post(`${BASE_URL}/admin/users/${id}/deauth`,
+            "Sessions deauthorized correctly",
+            "Error deauthorizing sessions"
+        );
+    }
 }
 
 function disableUser(event) {
@@ -238,7 +246,7 @@ document.addEventListener("DOMContentLoaded", (/*event*/) => {
             [-1, 2, 5, 10, 25, 50],
             ["All", 2, 5, 10, 25, 50]
         ],
-        "pageLength": 2, // Default show all
+        "pageLength": -1, // Default show all
         "columnDefs": [{
             "targets": [1, 2],
             "type": "date-iso"

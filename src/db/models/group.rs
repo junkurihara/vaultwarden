@@ -64,7 +64,32 @@ impl Group {
             "AccessAll": self.access_all,
             "ExternalId": self.external_id,
             "CreationDate": format_date(&self.creation_date),
-            "RevisionDate": format_date(&self.revision_date)
+            "RevisionDate": format_date(&self.revision_date),
+            "Object": "group"
+        })
+    }
+
+    pub async fn to_json_details(&self, conn: &mut DbConn) -> Value {
+        let collections_groups: Vec<Value> = CollectionGroup::find_by_group(&self.uuid, conn)
+            .await
+            .iter()
+            .map(|entry| {
+                json!({
+                    "Id": entry.collections_uuid,
+                    "ReadOnly": entry.read_only,
+                    "HidePasswords": entry.hide_passwords
+                })
+            })
+            .collect();
+
+        json!({
+            "Id": self.uuid,
+            "OrganizationId": self.organizations_uuid,
+            "Name": self.name,
+            "AccessAll": self.access_all,
+            "ExternalId": self.external_id,
+            "Collections": collections_groups,
+            "Object": "groupDetails"
         })
     }
 
@@ -165,6 +190,17 @@ impl Group {
                 .load::<GroupDb>(conn)
                 .expect("Error loading groups")
                 .from_db()
+        }}
+    }
+
+    pub async fn count_by_org(organizations_uuid: &str, conn: &mut DbConn) -> i64 {
+        db_run! { conn: {
+            groups::table
+                .filter(groups::organizations_uuid.eq(organizations_uuid))
+                .count()
+                .first::<i64>(conn)
+                .ok()
+                .unwrap_or(0)
         }}
     }
 
