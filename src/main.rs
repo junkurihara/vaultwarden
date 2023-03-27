@@ -111,7 +111,7 @@ async fn main() -> Result<(), Error> {
     create_dir(&CONFIG.attachments_folder(), "attachments folder");
 
     let pool = create_db_pool().await;
-    schedule_jobs(pool.clone()).await;
+    schedule_jobs(pool.clone());
     crate::db::models::TwoFactor::migrate_u2f_to_webauthn(&mut pool.get().await.unwrap()).await.unwrap();
 
     launch_rocket(pool, extra_debug).await // Blocks until program termination.
@@ -250,6 +250,14 @@ fn init_logging(level: log::LevelFilter) -> Result<(), fern::InitError> {
             log::LevelFilter::Off
         };
 
+    // Only show rocket underscore `_` logs when the level is Debug or higher
+    // Else this will bloat the log output with useless messages.
+    let rocket_underscore_level = if level >= log::LevelFilter::Debug {
+        log::LevelFilter::Warn
+    } else {
+        log::LevelFilter::Off
+    };
+
     let mut logger = fern::Dispatch::new()
         .level(level)
         // Hide unknown certificate errors if using self-signed
@@ -257,7 +265,7 @@ fn init_logging(level: log::LevelFilter) -> Result<(), fern::InitError> {
         // Hide failed to close stream messages
         .level_for("hyper::server", log::LevelFilter::Warn)
         // Silence rocket logs
-        .level_for("_", log::LevelFilter::Warn)
+        .level_for("_", rocket_underscore_level)
         .level_for("rocket::launch", log::LevelFilter::Error)
         .level_for("rocket::launch_", log::LevelFilter::Error)
         .level_for("rocket::rocket", log::LevelFilter::Warn)
@@ -269,7 +277,8 @@ fn init_logging(level: log::LevelFilter) -> Result<(), fern::InitError> {
         // Prevent cookie_store logs
         .level_for("cookie_store", log::LevelFilter::Off)
         // Variable level for trust-dns used by reqwest
-        .level_for("trust_dns_proto", trust_dns_level)
+        .level_for("trust_dns_resolver::name_server::name_server", trust_dns_level)
+        .level_for("trust_dns_proto::xfer", trust_dns_level)
         .level_for("diesel_logger", diesel_logger_level)
         .chain(std::io::stdout());
 
@@ -277,9 +286,9 @@ fn init_logging(level: log::LevelFilter) -> Result<(), fern::InitError> {
     // This can contain sensitive information we do not want in the default debug/trace logging.
     if CONFIG.smtp_debug() {
         println!(
-            "[WARNING] SMTP Debugging is enabled (SMTP_DEBUG=true). Sensitive information could be disclosed via logs!"
+            "[WARNING] SMTP Debugging is enabled (SMTP_DEBUG=true). Sensitive information could be disclosed via logs!\n\
+             [WARNING] Only enable SMTP_DEBUG during troubleshooting!\n"
         );
-        println!("[WARNING] Only enable SMTP_DEBUG during troubleshooting!\n");
         logger = logger.level_for("lettre::transport::smtp", log::LevelFilter::Debug)
     } else {
         logger = logger.level_for("lettre::transport::smtp", log::LevelFilter::Off)
@@ -539,7 +548,7 @@ async fn launch_rocket(pool: db::DbPool, extra_debug: bool) -> Result<(), Error>
     Ok(())
 }
 
-async fn schedule_jobs(pool: db::DbPool) {
+fn schedule_jobs(pool: db::DbPool) {
     if CONFIG.job_poll_interval_ms() == 0 {
         info!("Job scheduler disabled.");
         return;
@@ -615,9 +624,7 @@ async fn schedule_jobs(pool: db::DbPool) {
             // tick, the one that was added earlier will run first.
             loop {
                 sched.tick();
-                runtime.block_on(async move {
-                    tokio::time::sleep(tokio::time::Duration::from_millis(CONFIG.job_poll_interval_ms())).await
-                });
+                runtime.block_on(tokio::time::sleep(tokio::time::Duration::from_millis(CONFIG.job_poll_interval_ms())));
             }
         })
         .expect("Error spawning job scheduler thread");
