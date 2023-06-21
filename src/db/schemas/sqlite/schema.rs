@@ -49,6 +49,7 @@ table! {
         user_uuid -> Text,
         name -> Text,
         atype -> Integer,
+        push_uuid -> Nullable<Text>,
         push_token -> Nullable<Text>,
         refresh_token -> Text,
         twofactor_remember -> Nullable<Text>,
@@ -207,6 +208,7 @@ table! {
         client_kdf_parallelism -> Nullable<Integer>,
         api_key -> Nullable<Text>,
         avatar_color -> Nullable<Text>,
+        external_id -> Nullable<Text>,
     }
 }
 
@@ -229,6 +231,16 @@ table! {
         status -> Integer,
         atype -> Integer,
         reset_password_key -> Nullable<Text>,
+    }
+}
+
+table! {
+    organization_api_key (uuid, org_uuid) {
+        uuid -> Text,
+        org_uuid -> Text,
+        atype -> Integer,
+        api_key -> Text,
+        revision_date -> Timestamp,
     }
 }
 
@@ -296,6 +308,7 @@ joinable!(users_collections -> users (user_uuid));
 joinable!(users_organizations -> organizations (org_uuid));
 joinable!(users_organizations -> users (user_uuid));
 joinable!(users_organizations -> ciphers (org_uuid));
+joinable!(organization_api_key -> organizations (org_uuid));
 joinable!(emergency_access -> users (grantor_uuid));
 joinable!(groups -> organizations (organizations_uuid));
 joinable!(groups_users -> users_organizations (users_organizations_uuid));
@@ -320,6 +333,7 @@ allow_tables_to_appear_in_same_query!(
     users,
     users_collections,
     users_organizations,
+    organization_api_key,
     emergency_access,
     groups,
     groups_users,

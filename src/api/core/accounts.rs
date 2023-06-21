@@ -4,7 +4,8 @@ use serde_json::Value;
 
 use crate::{
     api::{
-        core::log_user_event, EmptyResult, JsonResult, JsonUpcase, Notify, NumberOrString, PasswordData, UpdateType,
+        core::log_user_event, register_push_device, unregister_push_device, EmptyResult, JsonResult, JsonUpcase,
+        Notify, NumberOrString, PasswordData, UpdateType,
     },
     auth::{decode_delete, decode_invite, decode_verify_email, Headers},
     crypto,
@@ -35,6 +36,7 @@ pub fn routes() -> Vec<rocket::Route> {
         post_verify_email_token,
         post_delete_recover,
         post_delete_recover_token,
+        post_device_token,
         delete_account,
         post_delete_account,
         revision_date,
@@ -46,6 +48,9 @@ pub fn routes() -> Vec<rocket::Route> {
         get_known_device,
         get_known_device_from_path,
         put_avatar,
+        put_device_token,
+        put_clear_device_token,
+        post_clear_device_token,
     ]
 }
 
@@ -929,4 +934,65 @@ impl<'r> FromRequest<'r> for KnownDevice {
             uuid,
         })
     }
+}
+
+#[derive(Deserialize)]
+#[allow(non_snake_case)]
+struct PushToken {
+    PushToken: String,
+}
+
+#[post("/devices/identifier/<uuid>/token", data = "<data>")]
+async fn post_device_token(uuid: &str, data: JsonUpcase<PushToken>, headers: Headers, conn: DbConn) -> EmptyResult {
+    put_device_token(uuid, data, headers, conn).await
+}
+
+#[put("/devices/identifier/<uuid>/token", data = "<data>")]
+async fn put_device_token(uuid: &str, data: JsonUpcase<PushToken>, headers: Headers, mut conn: DbConn) -> EmptyResult {
+    if !CONFIG.push_enabled() {
+        return Ok(());
+    }
+
+    let data = data.into_inner().data;
+    let token = data.PushToken;
+    let mut device = match Device::find_by_uuid_and_user(&headers.device.uuid, &headers.user.uuid, &mut conn).await {
+        Some(device) => device,
+        None => err!(format!("Error: device {uuid} should be present before a token can be assigned")),
+    };
+    device.push_token = Some(token);
+    if device.push_uuid.is_none() {
+        device.push_uuid = Some(uuid::Uuid::new_v4().to_string());
+    }
+    if let Err(e) = device.save(&mut conn).await {
+        err!(format!("An error occured while trying to save the device push token: {e}"));
+    }
+    if let Err(e) = register_push_device(headers.user.uuid, device).await {
+        err!(format!("An error occured while proceeding registration of a device: {e}"));
+    }
+
+    Ok(())
+}
+
+#[put("/devices/identifier/<uuid>/clear-token")]
+async fn put_clear_device_token(uuid: &str, mut conn: DbConn) -> EmptyResult {
+    // This only clears push token
+    // https://github.com/bitwarden/core/blob/master/src/Api/Controllers/DevicesController.cs#L109
+    // https://github.com/bitwarden/core/blob/master/src/Core/Services/Implementations/DeviceService.cs#L37
+    // This is somehow not implemented in any app, added it in case it is required
+    if !CONFIG.push_enabled() {
+        return Ok(());
+    }
+
+    if let Some(device) = Device::find_by_uuid(uuid, &mut conn).await {
+        Device::clear_push_token_by_uuid(uuid, &mut conn).await?;
+        unregister_push_device(device.uuid).await?;
+    }
+
+    Ok(())
+}
+
+// On upstream server, both PUT and POST are declared. Implementing the POST method in case it would be useful somewhere
+#[post("/devices/identifier/<uuid>/clear-token")]
+async fn post_clear_device_token(uuid: &str, conn: DbConn) -> EmptyResult {
+    put_clear_device_token(uuid, conn).await
 }
