@@ -15,18 +15,18 @@
 # - From https://hub.docker.com/r/vaultwarden/web-vault/tags,
 #   click the tag name to view the digest of the image it currently points to.
 # - From the command line:
-#     $ docker pull docker.io/vaultwarden/web-vault:v2023.5.0
-#     $ docker image inspect --format "{{.RepoDigests}}" docker.io/vaultwarden/web-vault:v2023.5.0
-#     [docker.io/vaultwarden/web-vault@sha256:e5b5e99d132d50dc73176afb65f41cf3b834fb06bfa1d621ac16c705c3f10085]
+#     $ docker pull docker.io/vaultwarden/web-vault:v2023.7.1
+#     $ docker image inspect --format "{{.RepoDigests}}" docker.io/vaultwarden/web-vault:v2023.7.1
+#     [docker.io/vaultwarden/web-vault@sha256:b306f38fe0d54fa3d79059a737f8e1803da44ddc5f273c2aecdd6a4886211b0f]
 #
 # - Conversely, to get the tag name from the digest:
-#     $ docker image inspect --format "{{.RepoTags}}" docker.io/vaultwarden/web-vault@sha256:e5b5e99d132d50dc73176afb65f41cf3b834fb06bfa1d621ac16c705c3f10085
-#     [docker.io/vaultwarden/web-vault:v2023.5.0]
+#     $ docker image inspect --format "{{.RepoTags}}" docker.io/vaultwarden/web-vault@sha256:b306f38fe0d54fa3d79059a737f8e1803da44ddc5f273c2aecdd6a4886211b0f
+#     [docker.io/vaultwarden/web-vault:v2023.7.1]
 #
-FROM docker.io/vaultwarden/web-vault@sha256:e5b5e99d132d50dc73176afb65f41cf3b834fb06bfa1d621ac16c705c3f10085 as vault
+FROM docker.io/vaultwarden/web-vault@sha256:b306f38fe0d54fa3d79059a737f8e1803da44ddc5f273c2aecdd6a4886211b0f as vault
 
 ########################## BUILD IMAGE  ##########################
-FROM docker.io/library/rust:1.70.0-bullseye as build
+FROM docker.io/library/rust:1.72.0-bookworm as build
 
 # Build time options to avoid dpkg warnings and help with reproducible builds.
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -34,6 +34,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     TZ=UTC \
     TERM=xterm-256color \
     CARGO_HOME="/root/.cargo" \
+    REGISTRIES_CRATES_IO_PROTOCOL=sparse \
     USER="root"
 
 # Create CARGO_HOME folder and don't download rust docs
@@ -71,7 +72,7 @@ WORKDIR /app
 
 # Copies over *only* your manifests and build files
 COPY ./Cargo.* ./
-COPY ./rust-toolchain ./rust-toolchain
+COPY ./rust-toolchain.toml ./rust-toolchain.toml
 COPY ./build.rs ./build.rs
 
 RUN rustup target add aarch64-unknown-linux-gnu
@@ -99,7 +100,7 @@ RUN cargo build --features ${DB} --release --target=aarch64-unknown-linux-gnu
 ######################## RUNTIME IMAGE  ########################
 # Create a new stage with a minimal image
 # because we already have a binary built
-FROM docker.io/balenalib/aarch64-debian:bullseye
+FROM docker.io/balenalib/aarch64-debian:bookworm
 
 ENV ROCKET_PROFILE="release" \
     ROCKET_ADDRESS=0.0.0.0 \

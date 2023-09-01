@@ -11,7 +11,7 @@ on:
       - "Cargo.*"
       - "build.rs"
       - "diesel.toml"
-      - "rust-toolchain"
+      - "rust-toolchain.toml"
 
     branches: # Only on paths above
       - main
@@ -24,7 +24,7 @@ jobs:
   # Some checks to determine if we need to continue with building a new docker.
   # We will skip this check if we are creating a tag, because that has the same hash as a previous run already.
   skip_check:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     if: ${{ github.repository == 'dani-garcia/vaultwarden' }}
     outputs:
       should_skip: ${{ steps.skip_check.outputs.should_skip }}
@@ -38,7 +38,7 @@ jobs:
         if: ${{ startsWith(github.ref, 'refs/heads/') }}
 
   docker-build:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     timeout-minutes: 120
     needs: skip_check
     # Start a local docker registry to be used to generate multi-arch images.
@@ -73,7 +73,7 @@ jobs:
     steps:
       # Checkout the repo
       - name: Checkout
-        uses: actions/checkout@c85c95e3d7251135ab7dc9ce3241c5835cc595a9 # v3.5.3
+        uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
         with:
           fetch-depth: 0
 
