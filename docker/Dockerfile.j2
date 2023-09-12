@@ -2,7 +2,7 @@
 
 # This file was generated using a Jinja2 template.
 # Please make your changes in `Dockerfile.j2` and then `make` the individual Dockerfiles.
-{% set rust_version = "1.71.1" %}
+{% set rust_version = "1.72.0" %}
 {% set debian_version = "bookworm" %}
 {% set alpine_version = "3.17" %}
 {% set build_stage_base_image = "docker.io/library/rust:%s-%s" % (rust_version, debian_version) %}
@@ -61,8 +61,8 @@
 # 	https://docs.docker.com/develop/develop-images/multistage-build/
 # 	https://whitfin.io/speeding-up-rust-docker-builds/
 ####################### VAULT BUILD IMAGE  #######################
-{% set vault_version = "v2023.7.1" %}
-{% set vault_image_digest = "sha256:b306f38fe0d54fa3d79059a737f8e1803da44ddc5f273c2aecdd6a4886211b0f" %}
+{% set vault_version = "v2023.8.2" %}
+{% set vault_image_digest = "sha256:b361e79309ef2c4368f880f350166daade41eb0927a9adf376c76e3713027252" %}
 # The web-vault digest specifies a particular web-vault build on Docker Hub.
 # Using the digest instead of the tag name provides better security,
 # as the digest of an image is immutable, whereas a tag name can later
@@ -146,7 +146,7 @@ WORKDIR /app
 
 # Copies over *only* your manifests and build files
 COPY ./Cargo.* ./
-COPY ./rust-toolchain ./rust-toolchain
+COPY ./rust-toolchain.toml ./rust-toolchain.toml
 COPY ./build.rs ./build.rs
 
 {% if package_arch_target is defined %}
