@@ -160,7 +160,7 @@ mimalloc = { version = "0.1.38", features = ["secure"], default-features = false
 which = "4.4.0"
 
 ## Argon2 for forked version
-rust-argon2 = { version = "1.0.0", package = "rust-argon2" }
+rust-argon2 = { version = "2.0.0", package = "rust-argon2" }
 
 # Argon2 library with support for the PHC format
 argon2 = "0.5.1"
