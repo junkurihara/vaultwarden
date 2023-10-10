@@ -5,7 +5,7 @@ use std::num::NonZeroU32;
 
 use data_encoding::{Encoding, HEXLOWER};
 use ring::{digest, hmac, pbkdf2};
-use rust_argon2::{hash_raw, verify_raw, Config, ThreadMode, Variant, Version};
+use rust_argon2::{hash_raw, verify_raw, Config, Variant, Version};
 
 static LEGACY_PBKDF2_DIGEST_ALG: pbkdf2::Algorithm = pbkdf2::PBKDF2_HMAC_SHA256;
 const OUTPUT_LEN: usize = digest::SHA256_OUTPUT_LEN;
@@ -17,7 +17,6 @@ fn get_argon2_config(iterations: u32, memory: u32, parallelism: u32) -> Config<'
         mem_cost: memory,
         time_cost: iterations,
         lanes: parallelism,
-        thread_mode: ThreadMode::Sequential,
         secret: &[],
         ad: &[],
         hash_length: OUTPUT_LEN as u32,
