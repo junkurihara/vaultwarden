@@ -82,9 +82,12 @@ mod mail;
 mod ratelimit;
 mod util;
 
+use crate::api::purge_auth_requests;
+use crate::api::WS_ANONYMOUS_SUBSCRIPTIONS;
 pub use config::CONFIG;
 pub use error::{Error, MapResult};
 use rocket::data::{Limits, ToByteUnit};
+use std::sync::Arc;
 pub use util::is_running_in_docker;
 
 #[rocket::main]
@@ -258,6 +261,13 @@ fn init_logging(level: log::LevelFilter) -> Result<(), fern::InitError> {
         log::LevelFilter::Off
     };
 
+    // Only show handlebar logs when the level is Trace
+    let handlebars_level = if level >= log::LevelFilter::Trace {
+        log::LevelFilter::Trace
+    } else {
+        log::LevelFilter::Warn
+    };
+
     let mut logger = fern::Dispatch::new()
         .level(level)
         // Hide unknown certificate errors if using self-signed
@@ -279,6 +289,8 @@ fn init_logging(level: log::LevelFilter) -> Result<(), fern::InitError> {
         .level_for("rocket::shield::shield", log::LevelFilter::Warn)
         .level_for("hyper::proto", log::LevelFilter::Off)
         .level_for("hyper::client", log::LevelFilter::Off)
+        // Filter handlebars logs
+        .level_for("handlebars::render", handlebars_level)
         // Prevent cookie_store logs
         .level_for("cookie_store", log::LevelFilter::Off)
         // Variable level for trust-dns used by reqwest
@@ -533,6 +545,7 @@ async fn launch_rocket(pool: db::DbPool, extra_debug: bool) -> Result<(), Error>
         .register([basepath, "/admin"].concat(), api::admin_catchers())
         .manage(pool)
         .manage(api::start_notification_server())
+        .manage(Arc::clone(&WS_ANONYMOUS_SUBSCRIPTIONS))
         .attach(util::AppHeaders())
         .attach(util::Cors())
         .attach(util::BetterLogging(extra_debug))
@@ -605,6 +618,12 @@ fn schedule_jobs(pool: db::DbPool) {
             if !CONFIG.emergency_notification_reminder_schedule().is_empty() {
                 sched.add(Job::new(CONFIG.emergency_notification_reminder_schedule().parse().unwrap(), || {
                     runtime.spawn(api::emergency_notification_reminder_job(pool.clone()));
+                }));
+            }
+
+            if !CONFIG.auth_request_purge_schedule().is_empty() {
+                sched.add(Job::new(CONFIG.auth_request_purge_schedule().parse().unwrap(), || {
+                    runtime.spawn(purge_auth_requests(pool.clone()));
                 }));
             }
 

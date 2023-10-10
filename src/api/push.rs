@@ -116,7 +116,7 @@ pub async fn unregister_push_device(uuid: String) -> EmptyResult {
         .await
     {
         Ok(r) => r,
-        Err(e) => err!(format!("An error occured during device unregistration: {e}")),
+        Err(e) => err!(format!("An error occurred during device unregistration: {e}")),
     };
     Ok(())
 }
@@ -252,6 +252,43 @@ async fn send_to_push_relay(notification_data: Value) {
         .send()
         .await
     {
-        error!("An error occured while sending a send update to the push relay: {}", e);
+        error!("An error occurred while sending a send update to the push relay: {}", e);
     };
+}
+
+pub async fn push_auth_request(user_uuid: String, auth_request_uuid: String, conn: &mut crate::db::DbConn) {
+    if Device::check_user_has_push_device(user_uuid.as_str(), conn).await {
+        tokio::task::spawn(send_to_push_relay(json!({
+            "userId": user_uuid,
+            "organizationId": (),
+            "deviceId": null,
+            "identifier": null,
+            "type": UpdateType::AuthRequest as i32,
+            "payload": {
+                "id": auth_request_uuid,
+                "userId": user_uuid,
+            }
+        })));
+    }
+}
+
+pub async fn push_auth_response(
+    user_uuid: String,
+    auth_request_uuid: String,
+    approving_device_uuid: String,
+    conn: &mut crate::db::DbConn,
+) {
+    if Device::check_user_has_push_device(user_uuid.as_str(), conn).await {
+        tokio::task::spawn(send_to_push_relay(json!({
+            "userId": user_uuid,
+            "organizationId": (),
+            "deviceId": approving_device_uuid,
+            "identifier": approving_device_uuid,
+            "type": UpdateType::AuthRequestResponse as i32,
+            "payload": {
+                "id": auth_request_uuid,
+                "userId": user_uuid,
+            }
+        })));
+    }
 }

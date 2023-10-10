@@ -155,7 +155,27 @@ async fn _password_login(
 
     // Check password
     let password = data.password.as_ref().unwrap();
-    if !user.check_valid_password(password) {
+    if let Some(auth_request_uuid) = data.auth_request.clone() {
+        if let Some(auth_request) = AuthRequest::find_by_uuid(auth_request_uuid.as_str(), conn).await {
+            if !auth_request.check_access_code(password) {
+                err!(
+                    "Username or access code is incorrect. Try again",
+                    format!("IP: {}. Username: {}.", ip.ip, username),
+                    ErrorEvent {
+                        event: EventType::UserFailedLogIn,
+                    }
+                )
+            }
+        } else {
+            err!(
+                "Auth request not found. Try again.",
+                format!("IP: {}. Username: {}.", ip.ip, username),
+                ErrorEvent {
+                    event: EventType::UserFailedLogIn,
+                }
+            )
+        }
+    } else if !user.check_valid_password(password) {
         err!(
             "Username or password is incorrect. Try again",
             format!("IP: {}. Username: {}.", ip.ip, username),
@@ -260,6 +280,10 @@ async fn _password_login(
         "ResetMasterPassword": false,// TODO: Same as above
         "scope": scope,
         "unofficialServer": true,
+        "UserDecryptionOptions": {
+            "HasMasterPassword": !user.password_hash.is_empty(),
+            "Object": "userDecryptionOptions"
+        },
     });
 
     if let Some(token) = twofactor_token {
@@ -445,7 +469,7 @@ async fn twofactor_auth(
     TwoFactorIncomplete::mark_incomplete(user_uuid, &device.uuid, &device.name, ip, conn).await?;
 
     let twofactor_ids: Vec<_> = twofactors.iter().map(|tf| tf.atype).collect();
-    let selected_id = data.two_factor_provider.unwrap_or(twofactor_ids[0]); // If we aren't given a two factor provider, asume the first one
+    let selected_id = data.two_factor_provider.unwrap_or(twofactor_ids[0]); // If we aren't given a two factor provider, assume the first one
 
     let twofactor_code = match data.two_factor_token {
         Some(ref code) => code,
@@ -646,6 +670,8 @@ struct ConnectData {
     #[field(name = uncased("two_factor_remember"))]
     #[field(name = uncased("twofactorremember"))]
     two_factor_remember: Option<i32>,
+    #[field(name = uncased("authrequest"))]
+    auth_request: Option<String>,
 }
 
 fn _check_is_some<T>(value: &Option<T>, msg: &str) -> EmptyResult {
