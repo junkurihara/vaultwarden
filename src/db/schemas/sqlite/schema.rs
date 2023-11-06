@@ -15,6 +15,7 @@ table! {
         updated_at -> Timestamp,
         user_uuid -> Nullable<Text>,
         organization_uuid -> Nullable<Text>,
+        key -> Nullable<Text>,
         atype -> Integer,
         name -> Text,
         notes -> Nullable<Text>,
@@ -232,6 +233,7 @@ table! {
         status -> Integer,
         atype -> Integer,
         reset_password_key -> Nullable<Text>,
+        external_id -> Nullable<Text>,
     }
 }
 

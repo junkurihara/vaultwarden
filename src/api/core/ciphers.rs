@@ -206,12 +206,13 @@ pub struct CipherData {
     // TODO: Some of these might appear all the time, no need for Option
     OrganizationId: Option<String>,
 
+    Key: Option<String>,
+
     /*
     Login = 1,
     SecureNote = 2,
     Card = 3,
-    Identity = 4,
-    Fido2Key = 5
+    Identity = 4
     */
     pub Type: i32,
     pub Name: String,
@@ -223,7 +224,6 @@ pub struct CipherData {
     SecureNote: Option<Value>,
     Card: Option<Value>,
     Identity: Option<Value>,
-    Fido2Key: Option<Value>,
 
     Favorite: Option<bool>,
     Reprompt: Option<i32>,
@@ -359,14 +359,17 @@ pub async fn update_cipher_from_data(
     enforce_personal_ownership_policy(Some(&data), headers, conn).await?;
 
     // Check that the client isn't updating an existing cipher with stale data.
-    if let Some(dt) = data.LastKnownRevisionDate {
-        match NaiveDateTime::parse_from_str(&dt, "%+") {
-            // ISO 8601 format
-            Err(err) => warn!("Error parsing LastKnownRevisionDate '{}': {}", dt, err),
-            Ok(dt) if cipher.updated_at.signed_duration_since(dt).num_seconds() > 1 => {
-                err!("The client copy of this cipher is out of date. Resync the client and try again.")
+    // And only perform this check when not importing ciphers, else the date/time check will fail.
+    if ut != UpdateType::None {
+        if let Some(dt) = data.LastKnownRevisionDate {
+            match NaiveDateTime::parse_from_str(&dt, "%+") {
+                // ISO 8601 format
+                Err(err) => warn!("Error parsing LastKnownRevisionDate '{}': {}", dt, err),
+                Ok(dt) if cipher.updated_at.signed_duration_since(dt).num_seconds() > 1 => {
+                    err!("The client copy of this cipher is out of date. Resync the client and try again.")
+                }
+                Ok(_) => (),
             }
-            Ok(_) => (),
         }
     }
 
@@ -466,7 +469,6 @@ pub async fn update_cipher_from_data(
         2 => data.SecureNote,
         3 => data.Card,
         4 => data.Identity,
-        5 => data.Fido2Key,
         _ => err!("Invalid type"),
     };
 
@@ -483,6 +485,7 @@ pub async fn update_cipher_from_data(
         None => err!("Data missing"),
     };
 
+    cipher.key = data.Key;
     cipher.name = data.Name;
     cipher.notes = data.Notes;
     cipher.fields = data.Fields.map(|f| _clean_cipher_data(f).to_string());
@@ -1752,7 +1755,7 @@ impl CipherSyncData {
         let cipher_folders: HashMap<String, String>;
         let cipher_favorites: HashSet<String>;
         match sync_type {
-            // User Sync supports Folders and Favorits
+            // User Sync supports Folders and Favorites
             CipherSyncType::User => {
                 // Generate a HashMap with the Cipher UUID as key and the Folder UUID as value
                 cipher_folders = FolderCipher::find_by_user(user_uuid, conn).await.into_iter().collect();
@@ -1760,7 +1763,7 @@ impl CipherSyncData {
                 // Generate a HashSet of all the Cipher UUID's which are marked as favorite
                 cipher_favorites = Favorite::get_all_cipher_uuid_by_user(user_uuid, conn).await.into_iter().collect();
             }
-            // Organization Sync does not support Folders and Favorits.
+            // Organization Sync does not support Folders and Favorites.
             // If these are set, it will cause issues in the web-vault.
             CipherSyncType::Organization => {
                 cipher_folders = HashMap::with_capacity(0);
@@ -1805,7 +1808,7 @@ impl CipherSyncData {
             .map(|collection_group| (collection_group.collections_uuid.clone(), collection_group))
             .collect();
 
-        // Get all organizations that the user has full access to via group assignement
+        // Get all organizations that the user has full access to via group assignment
         let user_group_full_access_for_organizations: HashSet<String> =
             Group::gather_user_organizations_full_access(user_uuid, conn).await.into_iter().collect();
 

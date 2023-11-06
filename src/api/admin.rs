@@ -279,12 +279,11 @@ async fn get_user_or_404(uuid: &str, conn: &mut DbConn) -> ApiResult<User> {
 #[post("/invite", data = "<data>")]
 async fn invite_user(data: Json<InviteData>, _token: AdminToken, mut conn: DbConn) -> JsonResult {
     let data: InviteData = data.into_inner();
-    let email = data.email.clone();
     if User::find_by_mail(&data.email, &mut conn).await.is_some() {
         err_code!("User already exists", Status::Conflict.code)
     }
 
-    let mut user = User::new(email);
+    let mut user = User::new(data.email);
 
     async fn _generate_invite(user: &User, conn: &mut DbConn) -> EmptyResult {
         if CONFIG.mail_enabled() {
@@ -326,6 +325,10 @@ async fn get_users_json(_token: AdminToken, mut conn: DbConn) -> Json<Value> {
         let mut usr = u.to_json(&mut conn).await;
         usr["UserEnabled"] = json!(u.enabled);
         usr["CreatedAt"] = json!(format_naive_datetime_local(&u.created_at, DT_FMT));
+        usr["LastActive"] = match u.last_active(&mut conn).await {
+            Some(dt) => json!(format_naive_datetime_local(&dt, DT_FMT)),
+            None => json!(None::<String>),
+        };
         users_json.push(usr);
     }
 

@@ -1,68 +1,14 @@
 # syntax=docker/dockerfile:1
 
 # This file was generated using a Jinja2 template.
-# Please make your changes in `Dockerfile.j2` and then `make` the individual Dockerfiles.
-{% set rust_version = "1.72.0" %}
-{% set debian_version = "bookworm" %}
-{% set alpine_version = "3.17" %}
-{% set build_stage_base_image = "docker.io/library/rust:%s-%s" % (rust_version, debian_version) %}
-{% if "alpine" in target_file %}
-{%   if "amd64" in target_file %}
-{%     set build_stage_base_image = "docker.io/blackdex/rust-musl:x86_64-musl-stable-%s-openssl3" % rust_version %}
-{%     set runtime_stage_base_image = "docker.io/library/alpine:%s" % alpine_version %}
-{%     set package_arch_target = "x86_64-unknown-linux-musl" %}
-{%   elif "armv7" in target_file %}
-{%     set build_stage_base_image = "docker.io/blackdex/rust-musl:armv7-musleabihf-stable-%s-openssl3" % rust_version %}
-{%     set runtime_stage_base_image = "docker.io/balenalib/armv7hf-alpine:%s" % alpine_version %}
-{%     set package_arch_target = "armv7-unknown-linux-musleabihf" %}
-{%   elif "armv6" in target_file %}
-{%     set build_stage_base_image = "docker.io/blackdex/rust-musl:arm-musleabi-stable-%s-openssl3" % rust_version %}
-{%     set runtime_stage_base_image = "docker.io/balenalib/rpi-alpine:%s" % alpine_version %}
-{%     set package_arch_target = "arm-unknown-linux-musleabi" %}
-{%   elif "arm64" in target_file %}
-{%     set build_stage_base_image = "docker.io/blackdex/rust-musl:aarch64-musl-stable-%s-openssl3" % rust_version %}
-{%     set runtime_stage_base_image = "docker.io/balenalib/aarch64-alpine:%s" % alpine_version %}
-{%     set package_arch_target = "aarch64-unknown-linux-musl" %}
-{%   endif %}
-{% elif "amd64" in target_file %}
-{%   set runtime_stage_base_image = "docker.io/library/debian:%s-slim" % debian_version %}
-{% elif "arm64" in target_file %}
-{%   set runtime_stage_base_image = "docker.io/balenalib/aarch64-debian:%s" % debian_version %}
-{%   set package_arch_name = "arm64" %}
-{%   set package_arch_target = "aarch64-unknown-linux-gnu" %}
-{%   set package_cross_compiler = "aarch64-linux-gnu" %}
-{% elif "armv6" in target_file %}
-{%   set runtime_stage_base_image = "docker.io/balenalib/rpi-debian:%s" % debian_version %}
-{%   set package_arch_name = "armel" %}
-{%   set package_arch_target = "arm-unknown-linux-gnueabi" %}
-{%   set package_cross_compiler = "arm-linux-gnueabi" %}
-{% elif "armv7" in target_file %}
-{%   set runtime_stage_base_image = "docker.io/balenalib/armv7hf-debian:%s" % debian_version %}
-{%   set package_arch_name = "armhf" %}
-{%   set package_arch_target = "armv7-unknown-linux-gnueabihf" %}
-{%   set package_cross_compiler = "arm-linux-gnueabihf" %}
-{% endif %}
-{% if package_arch_name is defined %}
-{%   set package_arch_prefix = ":" + package_arch_name %}
-{% else %}
-{%   set package_arch_prefix = "" %}
-{% endif %}
-{% if package_arch_target is defined %}
-{%   set package_arch_target_param = " --target=" + package_arch_target %}
-{% else %}
-{%   set package_arch_target_param = "" %}
-{% endif %}
-{% if "buildkit" in target_file %}
-{%   set mount_rust_cache = "--mount=type=cache,target=/root/.cargo/git --mount=type=cache,target=/root/.cargo/registry " %}
-{% else %}
-{%   set mount_rust_cache = "" %}
-{% endif %}
+# Please make your changes in `DockerSettings.yaml` or `Dockerfile.j2` and then `make`
+# This will generate two Dockerfile's `Dockerfile.debian` and `Dockerfile.alpine`
+
 # Using multistage build:
 # 	https://docs.docker.com/develop/develop-images/multistage-build/
 # 	https://whitfin.io/speeding-up-rust-docker-builds/
-####################### VAULT BUILD IMAGE  #######################
-{% set vault_version = "v2023.8.2" %}
-{% set vault_image_digest = "sha256:b361e79309ef2c4368f880f350166daade41eb0927a9adf376c76e3713027252" %}
+
+####################### VAULT BUILD IMAGE #######################
 # The web-vault digest specifies a particular web-vault build on Docker Hub.
 # Using the digest instead of the tag name provides better security,
 # as the digest of an image is immutable, whereas a tag name can later
@@ -80,10 +26,33 @@
 #     $ docker image inspect --format "{{ '{{' }}.RepoTags}}" docker.io/vaultwarden/web-vault@{{ vault_image_digest }}
 #     [docker.io/vaultwarden/web-vault:{{ vault_version }}]
 #
-FROM docker.io/vaultwarden/web-vault@{{ vault_image_digest }} as vault
+FROM --platform=linux/amd64 docker.io/vaultwarden/web-vault@{{ vault_image_digest }} as vault
 
-########################## BUILD IMAGE  ##########################
-FROM {{ build_stage_base_image }} as build
+{% if base == "debian" %}
+########################## Cross Compile Docker Helper Scripts ##########################
+## We use the linux/amd64 no matter which Build Platform, since these are all bash scripts
+## And these bash scripts do not have any significant difference if at all
+FROM --platform=linux/amd64 docker.io/tonistiigi/xx@{{ xx_image_digest }} AS xx
+{% elif base == "alpine" %}
+########################## ALPINE BUILD IMAGES ##########################
+## NOTE: The Alpine Base Images do not support other platforms then linux/amd64
+## And for Alpine we define all build images here, they will only be loaded when actually used
+{% for arch in build_stage_image[base].arch_image %}
+FROM --platform={{ build_stage_image[base].platform }} {{ build_stage_image[base].arch_image[arch] }} as build_{{ arch }}
+{% endfor %}
+{% endif %}
+
+########################## BUILD IMAGE ##########################
+# hadolint ignore=DL3006
+FROM --platform={{ build_stage_image[base].platform }} {{ build_stage_image[base].image }} as build
+{% if base == "debian" %}
+COPY --from=xx / /
+{% endif %}
+ARG TARGETARCH
+ARG TARGETVARIANT
+ARG TARGETPLATFORM
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 # Build time options to avoid dpkg warnings and help with reproducible builds.
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -91,133 +60,162 @@ ENV DEBIAN_FRONTEND=noninteractive \
     TZ=UTC \
     TERM=xterm-256color \
     CARGO_HOME="/root/.cargo" \
-    REGISTRIES_CRATES_IO_PROTOCOL=sparse \
     USER="root"
+{%- if base == "alpine" %} \
+    # Use PostgreSQL v15 during Alpine/MUSL builds instead of the default v11
+    # Debian Bookworm already contains libpq v15
+    PQ_LIB_DIR="/usr/local/musl/pq15/lib"
+{% endif %}
+
+{% if base == "debian" %}
+
+# Install clang to get `xx-cargo` working
+# Install pkg-config to allow amd64 builds to find all libraries
+# Install git so build.rs can determine the correct version
+# Install the libc cross packages based upon the debian-arch
+RUN apt-get update && \
+    apt-get install -y \
+        --no-install-recommends \
+        clang \
+        pkg-config \
+        git \
+        "libc6-$(xx-info debian-arch)-cross" \
+        "libc6-dev-$(xx-info debian-arch)-cross" \
+        "linux-libc-dev-$(xx-info debian-arch)-cross" && \
+    # Run xx-cargo early, since it sometimes seems to break when run at a later stage
+    echo "export CARGO_TARGET=$(xx-cargo --print-target-triple)" >> /env-cargo
+
+RUN xx-apt-get install -y \
+        --no-install-recommends \
+        gcc \
+        libmariadb3 \
+        libpq-dev \
+        libpq5 \
+        libssl-dev && \
+    # Force install arch dependend mariadb dev packages
+    # Installing them the normal way breaks several other packages (again)
+    apt-get download "libmariadb-dev-compat:$(xx-info debian-arch)" "libmariadb-dev:$(xx-info debian-arch)" && \
+    dpkg --force-all -i ./libmariadb-dev*.deb
+{% endif %}
 
 # Create CARGO_HOME folder and don't download rust docs
-RUN {{ mount_rust_cache -}} mkdir -pv "${CARGO_HOME}" \
+RUN mkdir -pv "${CARGO_HOME}" \
     && rustup set profile minimal
-
-{% if "alpine" in target_file %}
-# Use PostgreSQL v15 during Alpine/MUSL builds instead of the default v11
-# Debian Bookworm already contains libpq v15
-ENV PQ_LIB_DIR="/usr/local/musl/pq15/lib"
-{%   if "armv6" in target_file %}
-# To be able to build the armv6 image with mimalloc we need to tell the linker to also look for libatomic
-ENV RUSTFLAGS='-Clink-arg=-latomic'
-{%   endif %}
-{% elif "arm" in target_file %}
-# Install build dependencies for the {{ package_arch_name }} architecture
-RUN {{ mount_rust_cache -}} dpkg --add-architecture {{ package_arch_name }} \
-    && apt-get update \
-    && apt-get install -y \
-        --no-install-recommends \
-        gcc-{{ package_cross_compiler }} \
-        libc6-dev{{ package_arch_prefix }} \
-        linux-libc-dev{{ package_arch_prefix }} \
-        libmariadb-dev{{ package_arch_prefix }} \
-        libmariadb-dev-compat{{ package_arch_prefix }} \
-        libmariadb3{{ package_arch_prefix }} \
-        libpq-dev{{ package_arch_prefix }} \
-        libpq5{{ package_arch_prefix }} \
-        libssl-dev{{ package_arch_prefix }} \
-    #
-    # Make sure cargo has the right target config
-    && echo '[target.{{ package_arch_target }}]' >> "${CARGO_HOME}/config" \
-    && echo 'linker = "{{ package_cross_compiler }}-gcc"' >> "${CARGO_HOME}/config" \
-    && echo 'rustflags = ["-L/usr/lib/{{ package_cross_compiler }}"]' >> "${CARGO_HOME}/config"
-
-# Set arm specific environment values
-ENV CC_{{ package_arch_target | replace("-", "_") }}="/usr/bin/{{ package_cross_compiler }}-gcc" \
-    CROSS_COMPILE="1" \
-    OPENSSL_INCLUDE_DIR="/usr/include/{{ package_cross_compiler }}" \
-    OPENSSL_LIB_DIR="/usr/lib/{{ package_cross_compiler }}"
-{% elif "amd64" in target_file %}
-# Install build dependencies
-RUN apt-get update \
-    && apt-get install -y \
-        --no-install-recommends \
-        libmariadb-dev \
-        libpq-dev
-{% endif %}
 
 # Creates a dummy project used to grab dependencies
 RUN USER=root cargo new --bin /app
 WORKDIR /app
+
+{% if base == "debian" %}
+# Environment variables for cargo across Debian and Alpine
+RUN source /env-cargo && \
+    if xx-info is-cross ; then \
+        # We can't use xx-cargo since that uses clang, which doesn't work for our libraries.
+        # Because of this we generate the needed environment variables here which we can load in the needed steps.
+        echo "export CC_$(echo "${CARGO_TARGET}" | tr '[:upper:]' '[:lower:]' | tr - _)=/usr/bin/$(xx-info)-gcc" >> /env-cargo && \
+        echo "export CARGO_TARGET_$(echo "${CARGO_TARGET}" | tr '[:lower:]' '[:upper:]' | tr - _)_LINKER=/usr/bin/$(xx-info)-gcc" >> /env-cargo && \
+        echo "export PKG_CONFIG=/usr/bin/$(xx-info)-pkg-config" >> /env-cargo && \
+        echo "export CROSS_COMPILE=1" >> /env-cargo && \
+        echo "export OPENSSL_INCLUDE_DIR=/usr/include/$(xx-info)" >> /env-cargo && \
+        echo "export OPENSSL_LIB_DIR=/usr/lib/$(xx-info)" >> /env-cargo ; \
+    fi && \
+    # Output the current contents of the file
+    cat /env-cargo
+
+# Configure the DB ARG as late as possible to not invalidate the cached layers above
+ARG DB=sqlite,mysql,postgresql
+{% elif base == "alpine" %}
+# Shared variables across Debian and Alpine
+RUN echo "export CARGO_TARGET=${RUST_MUSL_CROSS_TARGET}" >> /env-cargo && \
+    # To be able to build the armv6 image with mimalloc we need to tell the linker to also look for libatomic
+    if [[ "${TARGETARCH}${TARGETVARIANT}" == "armv6" ]] ; then echo "export RUSTFLAGS='-Clink-arg=-latomic'" >> /env-cargo ; fi && \
+    # Output the current contents of the file
+    cat /env-cargo
+
+# Enable MiMalloc to improve performance on Alpine builds
+ARG DB=sqlite,mysql,postgresql,enable_mimalloc
+{% endif %}
+
+RUN source /env-cargo && \
+    rustup target add "${CARGO_TARGET}"
+
+ARG CARGO_PROFILE=release
+ARG VW_VERSION
 
 # Copies over *only* your manifests and build files
 COPY ./Cargo.* ./
 COPY ./rust-toolchain.toml ./rust-toolchain.toml
 COPY ./build.rs ./build.rs
 
-{% if package_arch_target is defined %}
-RUN {{ mount_rust_cache -}} rustup target add {{ package_arch_target }}
-{% endif %}
-
-# Configure the DB ARG as late as possible to not invalidate the cached layers above
-{% if "alpine" in target_file %}
-# Enable MiMalloc to improve performance on Alpine builds
-ARG DB=sqlite,mysql,postgresql,enable_mimalloc
-{% else %}
-ARG DB=sqlite,mysql,postgresql
-{% endif %}
-
 # Builds your dependencies and removes the
 # dummy project, except the target folder
 # This folder contains the compiled dependencies
-RUN {{ mount_rust_cache -}} cargo build --features ${DB} --release{{ package_arch_target_param }} \
-    && find . -not -path "./target*" -delete
+RUN source /env-cargo && \
+    cargo build --features ${DB} --profile "${CARGO_PROFILE}" --target="${CARGO_TARGET}" && \
+    find . -not -path "./target*" -delete
 
 # Copies the complete project
 # To avoid copying unneeded files, use .dockerignore
 COPY . .
 
-# Make sure that we actually build the project
-RUN touch src/main.rs
+# Builds again, this time it will be the actual source files being build
+RUN source /env-cargo && \
+    # Make sure that we actually build the project by updating the src/main.rs timestamp
+    touch src/main.rs && \
+    # Create a symlink to the binary target folder to easy copy the binary in the final stage
+    cargo build --features ${DB} --profile "${CARGO_PROFILE}" --target="${CARGO_TARGET}" && \
+    if [[ "${CARGO_PROFILE}" == "dev" ]] ; then \
+        ln -vfsr "/app/target/${CARGO_TARGET}/debug" /app/target/final ; \
+    else \
+        ln -vfsr "/app/target/${CARGO_TARGET}/${CARGO_PROFILE}" /app/target/final ; \
+    fi
 
-# Builds again, this time it'll just be
-# your actual source files being built
-RUN {{ mount_rust_cache -}} cargo build --features ${DB} --release{{ package_arch_target_param }}
 
 ######################## RUNTIME IMAGE  ########################
 # Create a new stage with a minimal image
 # because we already have a binary built
-FROM {{ runtime_stage_base_image }}
+#
+# To build these images you need to have qemu binfmt support.
+# See the following pages to help install these tools locally
+# Ubuntu/Debian: https://wiki.debian.org/QemuUserEmulation
+# Arch Linux: https://wiki.archlinux.org/title/QEMU#Chrooting_into_arm/arm64_environment_from_x86_64
+#
+# Or use a Docker image which modifies your host system to support this.
+# The GitHub Actions Workflow uses the same image as used below.
+# See: https://github.com/tonistiigi/binfmt
+# Usage: docker run --privileged --rm tonistiigi/binfmt --install arm64,arm
+# To uninstall: docker run --privileged --rm tonistiigi/binfmt --uninstall 'qemu-*'
+#
+# We need to add `--platform` here, because of a podman bug: https://github.com/containers/buildah/issues/4742
+FROM --platform=$TARGETPLATFORM {{ runtime_stage_image[base] }}
 
 ENV ROCKET_PROFILE="release" \
     ROCKET_ADDRESS=0.0.0.0 \
     ROCKET_PORT=80
-{%- if "alpine" in runtime_stage_base_image %} \
+{%- if base == "debian" %} \
+    DEBIAN_FRONTEND=noninteractive
+{% elif base == "alpine" %} \
     SSL_CERT_DIR=/etc/ssl/certs
 {% endif %}
 
-
-{% if "amd64" not in target_file %}
-RUN [ "cross-build-start" ]
-{% endif %}
-
 # Create data folder and Install needed libraries
-RUN mkdir /data \
-{% if "alpine" in runtime_stage_base_image %}
-    && apk add --no-cache \
+RUN mkdir /data && \
+{% if base == "debian" %}
+    apt-get update && apt-get install -y \
+        --no-install-recommends \
+        ca-certificates \
+        curl \
+        libmariadb-dev-compat \
+        libpq5 \
+        openssl && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+{% elif base == "alpine" %}
+    apk --no-cache add \
         ca-certificates \
         curl \
         openssl \
         tzdata
-{% else %}
-    && apt-get update && apt-get install -y \
-    --no-install-recommends \
-    ca-certificates \
-    curl \
-    libmariadb-dev-compat \
-    libpq5 \
-    openssl \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
-{% endif %}
-
-{% if "amd64" not in target_file %}
-RUN [ "cross-build-end" ]
 {% endif %}
 
 VOLUME /data
@@ -227,15 +225,12 @@ EXPOSE 3012
 # Copies the files from the context (Rocket.toml file and web-vault)
 # and the binary from the "build" stage to the current stage
 WORKDIR /
-COPY --from=vault /web-vault ./web-vault
-{% if package_arch_target is defined %}
-COPY --from=build /app/target/{{ package_arch_target }}/release/vaultwarden .
-{% else %}
-COPY --from=build /app/target/release/vaultwarden .
-{% endif %}
 
 COPY docker/healthcheck.sh /healthcheck.sh
 COPY docker/start.sh /start.sh
+
+COPY --from=vault /web-vault ./web-vault
+COPY --from=build /app/target/final/vaultwarden .
 
 HEALTHCHECK --interval=60s --timeout=10s CMD ["/healthcheck.sh"]
 

@@ -261,6 +261,13 @@ fn init_logging(level: log::LevelFilter) -> Result<(), fern::InitError> {
         log::LevelFilter::Off
     };
 
+    // Only show handlebar logs when the level is Trace
+    let handlebars_level = if level >= log::LevelFilter::Trace {
+        log::LevelFilter::Trace
+    } else {
+        log::LevelFilter::Warn
+    };
+
     let mut logger = fern::Dispatch::new()
         .level(level)
         // Hide unknown certificate errors if using self-signed
@@ -282,6 +289,8 @@ fn init_logging(level: log::LevelFilter) -> Result<(), fern::InitError> {
         .level_for("rocket::shield::shield", log::LevelFilter::Warn)
         .level_for("hyper::proto", log::LevelFilter::Off)
         .level_for("hyper::client", log::LevelFilter::Off)
+        // Filter handlebars logs
+        .level_for("handlebars::render", handlebars_level)
         // Prevent cookie_store logs
         .level_for("cookie_store", log::LevelFilter::Off)
         // Variable level for trust-dns used by reqwest
@@ -317,7 +326,16 @@ fn init_logging(level: log::LevelFilter) -> Result<(), fern::InitError> {
     }
 
     if let Some(log_file) = CONFIG.log_file() {
-        logger = logger.chain(fern::log_file(log_file)?);
+        #[cfg(windows)]
+        {
+            logger = logger.chain(fern::log_file(log_file)?);
+        }
+        #[cfg(not(windows))]
+        {
+            const SIGHUP: i32 = tokio::signal::unix::SignalKind::hangup().as_raw_value();
+            let path = Path::new(&log_file);
+            logger = logger.chain(fern::log_reopen1(path, [SIGHUP])?);
+        }
     }
 
     #[cfg(not(windows))]

@@ -1,0 +1,160 @@
+# syntax=docker/dockerfile:1
+
+# This file was generated using a Jinja2 template.
+# Please make your changes in `DockerSettings.yaml` or `Dockerfile.j2` and then `make`
+# This will generate two Dockerfile's `Dockerfile.debian` and `Dockerfile.alpine`
+
+# Using multistage build:
+# 	https://docs.docker.com/develop/develop-images/multistage-build/
+# 	https://whitfin.io/speeding-up-rust-docker-builds/
+
+####################### VAULT BUILD IMAGE #######################
+# The web-vault digest specifies a particular web-vault build on Docker Hub.
+# Using the digest instead of the tag name provides better security,
+# as the digest of an image is immutable, whereas a tag name can later
+# be changed to point to a malicious image.
+#
+# To verify the current digest for a given tag name:
+# - From https://hub.docker.com/r/vaultwarden/web-vault/tags,
+#   click the tag name to view the digest of the image it currently points to.
+# - From the command line:
+#     $ docker pull docker.io/vaultwarden/web-vault:v2023.10.0
+#     $ docker image inspect --format "{{.RepoDigests}}" docker.io/vaultwarden/web-vault:v2023.10.0
+#     [docker.io/vaultwarden/web-vault@sha256:419e4976921f98f1124f296ed02e68bf7f8ff29b3f1fba59e7e715228a065935]
+#
+# - Conversely, to get the tag name from the digest:
+#     $ docker image inspect --format "{{.RepoTags}}" docker.io/vaultwarden/web-vault@sha256:419e4976921f98f1124f296ed02e68bf7f8ff29b3f1fba59e7e715228a065935
+#     [docker.io/vaultwarden/web-vault:v2023.10.0]
+#
+FROM --platform=linux/amd64 docker.io/vaultwarden/web-vault@sha256:419e4976921f98f1124f296ed02e68bf7f8ff29b3f1fba59e7e715228a065935 as vault
+
+########################## ALPINE BUILD IMAGES ##########################
+## NOTE: The Alpine Base Images do not support other platforms then linux/amd64
+## And for Alpine we define all build images here, they will only be loaded when actually used
+FROM --platform=linux/amd64 ghcr.io/blackdex/rust-musl:x86_64-musl-stable-1.73.0 as build_amd64
+FROM --platform=linux/amd64 ghcr.io/blackdex/rust-musl:aarch64-musl-stable-1.73.0 as build_arm64
+FROM --platform=linux/amd64 ghcr.io/blackdex/rust-musl:armv7-musleabihf-stable-1.73.0 as build_armv7
+FROM --platform=linux/amd64 ghcr.io/blackdex/rust-musl:arm-musleabi-stable-1.73.0 as build_armv6
+
+########################## BUILD IMAGE ##########################
+# hadolint ignore=DL3006
+FROM --platform=linux/amd64 build_${TARGETARCH}${TARGETVARIANT} as build
+ARG TARGETARCH
+ARG TARGETVARIANT
+ARG TARGETPLATFORM
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+# Build time options to avoid dpkg warnings and help with reproducible builds.
+ENV DEBIAN_FRONTEND=noninteractive \
+    LANG=C.UTF-8 \
+    TZ=UTC \
+    TERM=xterm-256color \
+    CARGO_HOME="/root/.cargo" \
+    USER="root" \
+    # Use PostgreSQL v15 during Alpine/MUSL builds instead of the default v11
+    # Debian Bookworm already contains libpq v15
+    PQ_LIB_DIR="/usr/local/musl/pq15/lib"
+
+
+# Create CARGO_HOME folder and don't download rust docs
+RUN mkdir -pv "${CARGO_HOME}" \
+    && rustup set profile minimal
+
+# Creates a dummy project used to grab dependencies
+RUN USER=root cargo new --bin /app
+WORKDIR /app
+
+# Shared variables across Debian and Alpine
+RUN echo "export CARGO_TARGET=${RUST_MUSL_CROSS_TARGET}" >> /env-cargo && \
+    # To be able to build the armv6 image with mimalloc we need to tell the linker to also look for libatomic
+    if [[ "${TARGETARCH}${TARGETVARIANT}" == "armv6" ]] ; then echo "export RUSTFLAGS='-Clink-arg=-latomic'" >> /env-cargo ; fi && \
+    # Output the current contents of the file
+    cat /env-cargo
+
+# Enable MiMalloc to improve performance on Alpine builds
+ARG DB=sqlite,mysql,postgresql,enable_mimalloc
+
+RUN source /env-cargo && \
+    rustup target add "${CARGO_TARGET}"
+
+ARG CARGO_PROFILE=release
+ARG VW_VERSION
+
+# Copies over *only* your manifests and build files
+COPY ./Cargo.* ./
+COPY ./rust-toolchain.toml ./rust-toolchain.toml
+COPY ./build.rs ./build.rs
+
+# Builds your dependencies and removes the
+# dummy project, except the target folder
+# This folder contains the compiled dependencies
+RUN source /env-cargo && \
+    cargo build --features ${DB} --profile "${CARGO_PROFILE}" --target="${CARGO_TARGET}" && \
+    find . -not -path "./target*" -delete
+
+# Copies the complete project
+# To avoid copying unneeded files, use .dockerignore
+COPY . .
+
+# Builds again, this time it will be the actual source files being build
+RUN source /env-cargo && \
+    # Make sure that we actually build the project by updating the src/main.rs timestamp
+    touch src/main.rs && \
+    # Create a symlink to the binary target folder to easy copy the binary in the final stage
+    cargo build --features ${DB} --profile "${CARGO_PROFILE}" --target="${CARGO_TARGET}" && \
+    if [[ "${CARGO_PROFILE}" == "dev" ]] ; then \
+        ln -vfsr "/app/target/${CARGO_TARGET}/debug" /app/target/final ; \
+    else \
+        ln -vfsr "/app/target/${CARGO_TARGET}/${CARGO_PROFILE}" /app/target/final ; \
+    fi
+
+
+######################## RUNTIME IMAGE  ########################
+# Create a new stage with a minimal image
+# because we already have a binary built
+#
+# To build these images you need to have qemu binfmt support.
+# See the following pages to help install these tools locally
+# Ubuntu/Debian: https://wiki.debian.org/QemuUserEmulation
+# Arch Linux: https://wiki.archlinux.org/title/QEMU#Chrooting_into_arm/arm64_environment_from_x86_64
+#
+# Or use a Docker image which modifies your host system to support this.
+# The GitHub Actions Workflow uses the same image as used below.
+# See: https://github.com/tonistiigi/binfmt
+# Usage: docker run --privileged --rm tonistiigi/binfmt --install arm64,arm
+# To uninstall: docker run --privileged --rm tonistiigi/binfmt --uninstall 'qemu-*'
+#
+# We need to add `--platform` here, because of a podman bug: https://github.com/containers/buildah/issues/4742
+FROM --platform=$TARGETPLATFORM docker.io/library/alpine:3.18
+
+ENV ROCKET_PROFILE="release" \
+    ROCKET_ADDRESS=0.0.0.0 \
+    ROCKET_PORT=80 \
+    SSL_CERT_DIR=/etc/ssl/certs
+
+# Create data folder and Install needed libraries
+RUN mkdir /data && \
+    apk --no-cache add \
+        ca-certificates \
+        curl \
+        openssl \
+        tzdata
+
+VOLUME /data
+EXPOSE 80
+EXPOSE 3012
+
+# Copies the files from the context (Rocket.toml file and web-vault)
+# and the binary from the "build" stage to the current stage
+WORKDIR /
+
+COPY docker/healthcheck.sh /healthcheck.sh
+COPY docker/start.sh /start.sh
+
+COPY --from=vault /web-vault ./web-vault
+COPY --from=build /app/target/final/vaultwarden .
+
+HEALTHCHECK --interval=60s --timeout=10s CMD ["/healthcheck.sh"]
+
+CMD ["/start.sh"]
