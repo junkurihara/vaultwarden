@@ -88,7 +88,7 @@ target "debian" {
   inherits = ["_default_attributes"]
   dockerfile = "docker/Dockerfile.debian"
   tags = generate_tags("", platform_tag())
-  output = [join(",", flatten([["type=docker"], image_index_annotations()]))]
+  output = ["type=docker"]
 }
 
 // Multi Platform target, will build one tagged manifest with all supported architectures
@@ -138,7 +138,7 @@ target "alpine" {
   inherits = ["_default_attributes"]
   dockerfile = "docker/Dockerfile.alpine"
   tags = generate_tags("-alpine", platform_tag())
-  output = [join(",", flatten([["type=docker"], image_index_annotations()]))]
+  output = ["type=docker"]
 }
 
 // Multi Platform target, will build one tagged manifest with all supported architectures
@@ -216,7 +216,13 @@ function "generate_tags" {
   result = flatten([
     for registry in get_container_registries() :
       [for base_tag in get_base_tags() :
-        concat(["${registry}:${base_tag}${suffix}${platform}"])]
+        concat(
+          # If the base_tag contains latest, and the suffix contains `-alpine` add a `:alpine` tag too
+          base_tag == "latest" ? suffix == "-alpine" ? ["${registry}:alpine${platform}"] : [] : [],
+          # The default tagging strategy
+          ["${registry}:${base_tag}${suffix}${platform}"]
+        )
+      ]
   ])
 }
 
