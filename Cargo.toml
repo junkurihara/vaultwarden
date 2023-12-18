@@ -48,7 +48,7 @@ tracing = { version = "0.1.40", features = ["log"] } # Needed to have lettre and
 dotenvy = { version = "0.15.7", default-features = false }
 
 # Lazy initialization
-once_cell = "1.18.0"
+once_cell = "1.19.0"
 
 # Numerical libraries
 num-traits = "0.2.17"
@@ -67,7 +67,7 @@ dashmap = "5.5.3"
 
 # Async futures
 futures = "0.3.29"
-tokio = { version = "1.34.0", features = ["rt-multi-thread", "fs", "io-util", "parking_lot", "time", "signal"] }
+tokio = { version = "1.35.0", features = ["rt-multi-thread", "fs", "io-util", "parking_lot", "time", "signal"] }
 
 # A generic serialization/deserialization framework
 serde = { version = "1.0.193", features = ["derive"] }
@@ -83,7 +83,7 @@ libsqlite3-sys = { version = "0.27.0", features = ["bundled"], optional = true }
 
 # Crypto-related libraries
 rand = { version = "0.8.5", features = ["small_rng"] }
-ring = "0.17.6"
+ring = "0.17.7"
 
 # UUID generation
 uuid = { version = "1.6.1", features = ["v4"] }
@@ -141,10 +141,7 @@ cookie = "0.16.2"
 cookie_store = "0.19.1"
 
 # Used by U2F, JWT and PostgreSQL
-openssl = "=0.10.57"
-# Set openssl-sys fixed to v0.9.92 to prevent building issues with musl, arm and 32bit pointer width
-# It will force add a dynamically linked library which prevents the build from being static
-openssl-sys = "=0.9.92"
+openssl = "0.10.61"
 
 # CLI argument parsing
 pico-args = "0.5.0"
