@@ -9,7 +9,7 @@ use reqwest::Url;
 use crate::{
     db::DbConnType,
     error::Error,
-    util::{get_env, get_env_bool},
+    util::{get_env, get_env_bool, parse_experimental_client_feature_flags},
 };
 
 static CONFIG_FILE: Lazy<String> = Lazy::new(|| {
@@ -380,8 +380,10 @@ make_config! {
     push {
         /// Enable push notifications
         push_enabled:           bool,   false,  def,    false;
-        /// Push relay base uri
+        /// Push relay uri
         push_relay_uri:         String, false,  def,    "https://push.bitwarden.com".to_string();
+        /// Push identity uri
+        push_identity_uri:      String, false,  def,    "https://identity.bitwarden.com".to_string();
         /// Installation id |> The installation id from https://bitwarden.com/host
         push_installation_id:   Pass,   false,  def,    String::new();
         /// Installation key |> The installation key from https://bitwarden.com/host
@@ -552,6 +554,9 @@ make_config! {
         /// Disable authenticator time drifted codes to be valid |> Enabling this only allows the current TOTP code to be valid
         /// TOTP codes of the previous and next 30 seconds will be invalid.
         authenticator_disable_time_drift: bool, true, def, false;
+
+        /// Customize the enabled feature flags on the clients |> This is a comma separated list of feature flags to enable.
+        experimental_client_feature_flags: String, false, def, "fido2-vault-credentials".to_string();
 
         /// Require new device emails |> When a user logs in an email is required to be sent.
         /// If sending the email fails the login attempt will fail.
@@ -755,6 +760,34 @@ fn validate_config(cfg: &ConfigItems) -> Result<(), Error> {
             # added to your configuration.                                                         #\n\
             ########################################################################################\n"
         )
+    }
+
+    if cfg.push_enabled {
+        let push_relay_uri = cfg.push_relay_uri.to_lowercase();
+        if !push_relay_uri.starts_with("https://") {
+            err!("`PUSH_RELAY_URI` must start with 'https://'.")
+        }
+
+        if Url::parse(&push_relay_uri).is_err() {
+            err!("Invalid URL format for `PUSH_RELAY_URI`.");
+        }
+
+        let push_identity_uri = cfg.push_identity_uri.to_lowercase();
+        if !push_identity_uri.starts_with("https://") {
+            err!("`PUSH_IDENTITY_URI` must start with 'https://'.")
+        }
+
+        if Url::parse(&push_identity_uri).is_err() {
+            err!("Invalid URL format for `PUSH_IDENTITY_URI`.");
+        }
+    }
+
+    const KNOWN_FLAGS: &[&str] =
+        &["autofill-overlay", "autofill-v2", "browser-fileless-import", "fido2-vault-credentials"];
+    for flag in parse_experimental_client_feature_flags(&cfg.experimental_client_feature_flags).keys() {
+        if !KNOWN_FLAGS.contains(&flag.as_str()) {
+            warn!("The experimental client feature flag {flag:?} is unrecognized. Please ensure the feature flag is spelled correctly and that it is supported in this version.");
+        }
     }
 
     if cfg._enable_duo
