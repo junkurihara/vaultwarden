@@ -1,4 +1,4 @@
-use chrono::{Duration, NaiveDateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use rocket::serde::json::Json;
 use rocket::Route;
 
@@ -10,7 +10,7 @@ use crate::{
     auth::Headers,
     crypto,
     db::{
-        models::{EventType, TwoFactor, TwoFactorType},
+        models::{EventType, TwoFactor, TwoFactorType, User},
         DbConn,
     },
     error::{Error, MapResult},
@@ -232,9 +232,9 @@ pub async fn validate_email_code_str(user_uuid: &str, token: &str, data: &str, c
     twofactor.data = email_data.to_json();
     twofactor.save(conn).await?;
 
-    let date = NaiveDateTime::from_timestamp_opt(email_data.token_sent, 0).expect("Email token timestamp invalid.");
+    let date = DateTime::from_timestamp(email_data.token_sent, 0).expect("Email token timestamp invalid.").naive_utc();
     let max_time = CONFIG.email_expiration_time() as i64;
-    if date + Duration::seconds(max_time) < Utc::now().naive_utc() {
+    if date + TimeDelta::try_seconds(max_time).unwrap() < Utc::now().naive_utc() {
         err!(
             "Token has expired",
             ErrorEvent {
@@ -265,14 +265,14 @@ impl EmailTokenData {
         EmailTokenData {
             email,
             last_token: Some(token),
-            token_sent: Utc::now().naive_utc().timestamp(),
+            token_sent: Utc::now().timestamp(),
             attempts: 0,
         }
     }
 
     pub fn set_token(&mut self, token: String) {
         self.last_token = Some(token);
-        self.token_sent = Utc::now().naive_utc().timestamp();
+        self.token_sent = Utc::now().timestamp();
     }
 
     pub fn reset_token(&mut self) {
@@ -297,6 +297,15 @@ impl EmailTokenData {
     }
 }
 
+pub async fn activate_email_2fa(user: &User, conn: &mut DbConn) -> EmptyResult {
+    if user.verified_at.is_none() {
+        err!("Auto-enabling of email 2FA failed because the users email address has not been verified!");
+    }
+    let twofactor_data = EmailTokenData::new(user.email.clone(), String::new());
+    let twofactor = TwoFactor::new(user.uuid.clone(), TwoFactorType::Email, twofactor_data.to_json());
+    twofactor.save(conn).await
+}
+
 /// Takes an email address and obscures it by replacing it with asterisks except two characters.
 pub fn obscure_email(email: &str) -> String {
     let split: Vec<&str> = email.rsplitn(2, '@').collect();
@@ -316,6 +325,14 @@ pub fn obscure_email(email: &str) -> String {
     };
 
     format!("{}@{}", new_name, &domain)
+}
+
+pub async fn find_and_activate_email_2fa(user_uuid: &str, conn: &mut DbConn) -> EmptyResult {
+    if let Some(user) = User::find_by_uuid(user_uuid, conn).await {
+        activate_email_2fa(&user, conn).await
+    } else {
+        err!("User not found!");
+    }
 }
 
 #[cfg(test)]

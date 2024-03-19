@@ -5,8 +5,9 @@ use serde_json::Value;
 
 use crate::{
     api::{
-        core::log_user_event, register_push_device, unregister_push_device, AnonymousNotify, EmptyResult, JsonResult,
-        JsonUpcase, Notify, PasswordOrOtpData, UpdateType,
+        core::{log_user_event, two_factor::email},
+        register_push_device, unregister_push_device, AnonymousNotify, EmptyResult, JsonResult, JsonUpcase, Notify,
+        PasswordOrOtpData, UpdateType,
     },
     auth::{decode_delete, decode_invite, decode_verify_email, ClientHeaders, Headers},
     crypto,
@@ -103,6 +104,19 @@ fn enforce_password_hint_setting(password_hint: &Option<String>) -> EmptyResult 
         err!("Password hints have been disabled by the administrator. Remove the hint and try again.");
     }
     Ok(())
+}
+async fn is_email_2fa_required(org_user_uuid: Option<String>, conn: &mut DbConn) -> bool {
+    if !CONFIG._enable_email_2fa() {
+        return false;
+    }
+    if CONFIG.email_2fa_enforce_on_verified_invite() {
+        return true;
+    }
+    if org_user_uuid.is_some() {
+        return OrgPolicy::is_enabled_by_org(&org_user_uuid.unwrap(), OrgPolicyType::TwoFactorAuthentication, conn)
+            .await;
+    }
+    false
 }
 
 #[post("/accounts/register", data = "<data>")]
@@ -207,6 +221,10 @@ pub async fn _register(data: JsonUpcase<RegisterData>, mut conn: DbConn) -> Json
             user.last_verifying_at = Some(user.created_at);
         } else if let Err(e) = mail::send_welcome(&user.email).await {
             error!("Error sending welcome email: {:#?}", e);
+        }
+
+        if verified_by_invite && is_email_2fa_required(data.OrganizationUserId, &mut conn).await {
+            let _ = email::activate_email_2fa(&user, &mut conn).await;
         }
     }
 
@@ -559,6 +577,8 @@ async fn post_email_token(data: JsonUpcase<EmailTokenData>, headers: Headers, mu
         if let Err(e) = mail::send_change_email(&data.NewEmail, &token).await {
             error!("Error sending change-email email: {:#?}", e);
         }
+    } else {
+        debug!("Email change request for user ({}) to email ({}) with token ({})", user.uuid, data.NewEmail, token);
     }
 
     user.email_new = Some(data.NewEmail);
@@ -753,7 +773,7 @@ async fn delete_account(data: JsonUpcase<PasswordOrOtpData>, headers: Headers, m
 
 #[get("/accounts/revision-date")]
 fn revision_date(headers: Headers) -> JsonResult {
-    let revision_date = headers.user.updated_at.timestamp_millis();
+    let revision_date = headers.user.updated_at.and_utc().timestamp_millis();
     Ok(Json(json!(revision_date)))
 }
 

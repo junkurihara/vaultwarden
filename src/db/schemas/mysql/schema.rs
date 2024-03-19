@@ -162,7 +162,7 @@ table! {
         atype -> Integer,
         enabled -> Bool,
         data -> Text,
-        last_used -> Integer,
+        last_used -> BigInt,
     }
 }
 

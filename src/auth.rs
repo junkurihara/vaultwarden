@@ -1,10 +1,11 @@
 // JWT Handling
 //
-use chrono::{Duration, Utc};
+use chrono::{TimeDelta, Utc};
 use num_traits::FromPrimitive;
-use once_cell::sync::Lazy;
+use once_cell::sync::{Lazy, OnceCell};
 
 use jsonwebtoken::{self, errors::ErrorKind, Algorithm, DecodingKey, EncodingKey, Header};
+use openssl::rsa::Rsa;
 use serde::de::DeserializeOwned;
 use serde::ser::Serialize;
 
@@ -12,7 +13,7 @@ use crate::{error::Error, CONFIG};
 
 const JWT_ALGORITHM: Algorithm = Algorithm::RS256;
 
-pub static DEFAULT_VALIDITY: Lazy<Duration> = Lazy::new(|| Duration::hours(2));
+pub static DEFAULT_VALIDITY: Lazy<TimeDelta> = Lazy::new(|| TimeDelta::try_hours(2).unwrap());
 static JWT_HEADER: Lazy<Header> = Lazy::new(|| Header::new(JWT_ALGORITHM));
 
 pub static JWT_LOGIN_ISSUER: Lazy<String> = Lazy::new(|| format!("{}|login", CONFIG.domain_origin()));
@@ -26,23 +27,45 @@ static JWT_SEND_ISSUER: Lazy<String> = Lazy::new(|| format!("{}|send", CONFIG.do
 static JWT_ORG_API_KEY_ISSUER: Lazy<String> = Lazy::new(|| format!("{}|api.organization", CONFIG.domain_origin()));
 static JWT_FILE_DOWNLOAD_ISSUER: Lazy<String> = Lazy::new(|| format!("{}|file_download", CONFIG.domain_origin()));
 
-static PRIVATE_RSA_KEY: Lazy<EncodingKey> = Lazy::new(|| {
-    let key =
-        std::fs::read(CONFIG.private_rsa_key()).unwrap_or_else(|e| panic!("Error loading private RSA Key. \n{e}"));
-    EncodingKey::from_rsa_pem(&key).unwrap_or_else(|e| panic!("Error decoding private RSA Key.\n{e}"))
-});
-static PUBLIC_RSA_KEY: Lazy<DecodingKey> = Lazy::new(|| {
-    let key = std::fs::read(CONFIG.public_rsa_key()).unwrap_or_else(|e| panic!("Error loading public RSA Key. \n{e}"));
-    DecodingKey::from_rsa_pem(&key).unwrap_or_else(|e| panic!("Error decoding public RSA Key.\n{e}"))
-});
+static PRIVATE_RSA_KEY: OnceCell<EncodingKey> = OnceCell::new();
+static PUBLIC_RSA_KEY: OnceCell<DecodingKey> = OnceCell::new();
 
-pub fn load_keys() {
-    Lazy::force(&PRIVATE_RSA_KEY);
-    Lazy::force(&PUBLIC_RSA_KEY);
+pub fn initialize_keys() -> Result<(), crate::error::Error> {
+    let mut priv_key_buffer = Vec::with_capacity(2048);
+
+    let priv_key = {
+        let mut priv_key_file = File::options().create(true).read(true).write(true).open(CONFIG.private_rsa_key())?;
+
+        #[allow(clippy::verbose_file_reads)]
+        let bytes_read = priv_key_file.read_to_end(&mut priv_key_buffer)?;
+
+        if bytes_read > 0 {
+            Rsa::private_key_from_pem(&priv_key_buffer[..bytes_read])?
+        } else {
+            // Only create the key if the file doesn't exist or is empty
+            let rsa_key = openssl::rsa::Rsa::generate(2048)?;
+            priv_key_buffer = rsa_key.private_key_to_pem()?;
+            priv_key_file.write_all(&priv_key_buffer)?;
+            info!("Private key created correctly.");
+            rsa_key
+        }
+    };
+
+    let pub_key_buffer = priv_key.public_key_to_pem()?;
+
+    let enc = EncodingKey::from_rsa_pem(&priv_key_buffer)?;
+    let dec: DecodingKey = DecodingKey::from_rsa_pem(&pub_key_buffer)?;
+    if PRIVATE_RSA_KEY.set(enc).is_err() {
+        err!("PRIVATE_RSA_KEY must only be initialized once")
+    }
+    if PUBLIC_RSA_KEY.set(dec).is_err() {
+        err!("PUBLIC_RSA_KEY must only be initialized once")
+    }
+    Ok(())
 }
 
 pub fn encode_jwt<T: Serialize>(claims: &T) -> String {
-    match jsonwebtoken::encode(&JWT_HEADER, claims, &PRIVATE_RSA_KEY) {
+    match jsonwebtoken::encode(&JWT_HEADER, claims, PRIVATE_RSA_KEY.wait()) {
         Ok(token) => token,
         Err(e) => panic!("Error encoding jwt {e}"),
     }
@@ -56,7 +79,7 @@ fn decode_jwt<T: DeserializeOwned>(token: &str, issuer: String) -> Result<T, Err
     validation.set_issuer(&[issuer]);
 
     let token = token.replace(char::is_whitespace, "");
-    match jsonwebtoken::decode(&token, &PUBLIC_RSA_KEY, &validation) {
+    match jsonwebtoken::decode(&token, PUBLIC_RSA_KEY.wait(), &validation) {
         Ok(d) => Ok(d.claims),
         Err(err) => match *err.kind() {
             ErrorKind::InvalidToken => err!("Token is invalid"),
@@ -164,11 +187,11 @@ pub fn generate_invite_claims(
     user_org_id: Option<String>,
     invited_by_email: Option<String>,
 ) -> InviteJwtClaims {
-    let time_now = Utc::now().naive_utc();
+    let time_now = Utc::now();
     let expire_hours = i64::from(CONFIG.invitation_expiration_hours());
     InviteJwtClaims {
         nbf: time_now.timestamp(),
-        exp: (time_now + Duration::hours(expire_hours)).timestamp(),
+        exp: (time_now + TimeDelta::try_hours(expire_hours).unwrap()).timestamp(),
         iss: JWT_INVITE_ISSUER.to_string(),
         sub: uuid,
         email,
@@ -202,11 +225,11 @@ pub fn generate_emergency_access_invite_claims(
     grantor_name: String,
     grantor_email: String,
 ) -> EmergencyAccessInviteJwtClaims {
-    let time_now = Utc::now().naive_utc();
+    let time_now = Utc::now();
     let expire_hours = i64::from(CONFIG.invitation_expiration_hours());
     EmergencyAccessInviteJwtClaims {
         nbf: time_now.timestamp(),
-        exp: (time_now + Duration::hours(expire_hours)).timestamp(),
+        exp: (time_now + TimeDelta::try_hours(expire_hours).unwrap()).timestamp(),
         iss: JWT_EMERGENCY_ACCESS_INVITE_ISSUER.to_string(),
         sub: uuid,
         email,
@@ -233,10 +256,10 @@ pub struct OrgApiKeyLoginJwtClaims {
 }
 
 pub fn generate_organization_api_key_login_claims(uuid: String, org_id: String) -> OrgApiKeyLoginJwtClaims {
-    let time_now = Utc::now().naive_utc();
+    let time_now = Utc::now();
     OrgApiKeyLoginJwtClaims {
         nbf: time_now.timestamp(),
-        exp: (time_now + Duration::hours(1)).timestamp(),
+        exp: (time_now + TimeDelta::try_hours(1).unwrap()).timestamp(),
         iss: JWT_ORG_API_KEY_ISSUER.to_string(),
         sub: uuid,
         client_id: format!("organization.{org_id}"),
@@ -260,10 +283,10 @@ pub struct FileDownloadClaims {
 }
 
 pub fn generate_file_download_claims(uuid: String, file_id: String) -> FileDownloadClaims {
-    let time_now = Utc::now().naive_utc();
+    let time_now = Utc::now();
     FileDownloadClaims {
         nbf: time_now.timestamp(),
-        exp: (time_now + Duration::minutes(5)).timestamp(),
+        exp: (time_now + TimeDelta::try_minutes(5).unwrap()).timestamp(),
         iss: JWT_FILE_DOWNLOAD_ISSUER.to_string(),
         sub: uuid,
         file_id,
@@ -283,42 +306,42 @@ pub struct BasicJwtClaims {
 }
 
 pub fn generate_delete_claims(uuid: String) -> BasicJwtClaims {
-    let time_now = Utc::now().naive_utc();
+    let time_now = Utc::now();
     let expire_hours = i64::from(CONFIG.invitation_expiration_hours());
     BasicJwtClaims {
         nbf: time_now.timestamp(),
-        exp: (time_now + Duration::hours(expire_hours)).timestamp(),
+        exp: (time_now + TimeDelta::try_hours(expire_hours).unwrap()).timestamp(),
         iss: JWT_DELETE_ISSUER.to_string(),
         sub: uuid,
     }
 }
 
 pub fn generate_verify_email_claims(uuid: String) -> BasicJwtClaims {
-    let time_now = Utc::now().naive_utc();
+    let time_now = Utc::now();
     let expire_hours = i64::from(CONFIG.invitation_expiration_hours());
     BasicJwtClaims {
         nbf: time_now.timestamp(),
-        exp: (time_now + Duration::hours(expire_hours)).timestamp(),
+        exp: (time_now + TimeDelta::try_hours(expire_hours).unwrap()).timestamp(),
         iss: JWT_VERIFYEMAIL_ISSUER.to_string(),
         sub: uuid,
     }
 }
 
 pub fn generate_admin_claims() -> BasicJwtClaims {
-    let time_now = Utc::now().naive_utc();
+    let time_now = Utc::now();
     BasicJwtClaims {
         nbf: time_now.timestamp(),
-        exp: (time_now + Duration::minutes(CONFIG.admin_session_lifetime())).timestamp(),
+        exp: (time_now + TimeDelta::try_minutes(CONFIG.admin_session_lifetime()).unwrap()).timestamp(),
         iss: JWT_ADMIN_ISSUER.to_string(),
         sub: "admin_panel".to_string(),
     }
 }
 
 pub fn generate_send_claims(send_id: &str, file_id: &str) -> BasicJwtClaims {
-    let time_now = Utc::now().naive_utc();
+    let time_now = Utc::now();
     BasicJwtClaims {
         nbf: time_now.timestamp(),
-        exp: (time_now + Duration::minutes(2)).timestamp(),
+        exp: (time_now + TimeDelta::try_minutes(2).unwrap()).timestamp(),
         iss: JWT_SEND_ISSUER.to_string(),
         sub: format!("{send_id}/{file_id}"),
     }
@@ -475,7 +498,7 @@ impl<'r> FromRequest<'r> for Headers {
                 // Check if the stamp exception has expired first.
                 // Then, check if the current route matches any of the allowed routes.
                 // After that check the stamp in exception matches the one in the claims.
-                if Utc::now().naive_utc().timestamp() > stamp_exception.expire {
+                if Utc::now().timestamp() > stamp_exception.expire {
                     // If the stamp exception has been expired remove it from the database.
                     // This prevents checking this stamp exception for new requests.
                     let mut user = user;
@@ -799,7 +822,11 @@ impl<'r> FromRequest<'r> for OwnerHeaders {
 //
 // Client IP address detection
 //
-use std::net::IpAddr;
+use std::{
+    fs::File,
+    io::{Read, Write},
+    net::IpAddr,
+};
 
 pub struct ClientIp {
     pub ip: IpAddr,
