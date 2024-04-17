@@ -520,7 +520,7 @@ pub fn container_base_image() -> &'static str {
 use std::fmt;
 
 use serde::de::{self, DeserializeOwned, Deserializer, MapAccess, SeqAccess, Visitor};
-use serde_json::{self, Value};
+use serde_json::Value;
 
 pub type JsonMap = serde_json::Map<String, Value>;
 
@@ -706,7 +706,7 @@ pub fn get_reqwest_client() -> Client {
         Ok(client) => client,
         Err(e) => {
             error!("Possible trust-dns error, trying with trust-dns disabled: '{e}'");
-            get_reqwest_client_builder().trust_dns(false).build().expect("Failed to build client")
+            get_reqwest_client_builder().hickory_dns(false).build().expect("Failed to build client")
         }
     }
 }

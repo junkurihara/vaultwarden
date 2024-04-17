@@ -4,7 +4,7 @@ use chrono::{TimeDelta, Utc};
 use num_traits::FromPrimitive;
 use once_cell::sync::{Lazy, OnceCell};
 
-use jsonwebtoken::{self, errors::ErrorKind, Algorithm, DecodingKey, EncodingKey, Header};
+use jsonwebtoken::{errors::ErrorKind, Algorithm, DecodingKey, EncodingKey, Header};
 use openssl::rsa::Rsa;
 use serde::de::DeserializeOwned;
 use serde::ser::Serialize;
@@ -34,7 +34,8 @@ pub fn initialize_keys() -> Result<(), crate::error::Error> {
     let mut priv_key_buffer = Vec::with_capacity(2048);
 
     let priv_key = {
-        let mut priv_key_file = File::options().create(true).read(true).write(true).open(CONFIG.private_rsa_key())?;
+        let mut priv_key_file =
+            File::options().create(true).truncate(false).read(true).write(true).open(CONFIG.private_rsa_key())?;
 
         #[allow(clippy::verbose_file_reads)]
         let bytes_read = priv_key_file.read_to_end(&mut priv_key_buffer)?;
@@ -390,10 +391,8 @@ impl<'r> FromRequest<'r> for Host {
 
             let host = if let Some(host) = headers.get_one("X-Forwarded-Host") {
                 host
-            } else if let Some(host) = headers.get_one("Host") {
-                host
             } else {
-                ""
+                headers.get_one("Host").unwrap_or_default()
             };
 
             format!("{protocol}://{host}")
