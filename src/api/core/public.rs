@@ -137,7 +137,8 @@ async fn ldap_import(data: JsonUpcase<OrgImportData>, token: PublicToken, mut co
 
     if CONFIG.org_groups_enabled() {
         for group_data in &data.Groups {
-            let group_uuid = match Group::find_by_external_id(&group_data.ExternalId, &mut conn).await {
+            let group_uuid = match Group::find_by_external_id_and_org(&group_data.ExternalId, &org_id, &mut conn).await
+            {
                 Some(group) => group.uuid,
                 None => {
                     let mut group =
@@ -216,12 +217,8 @@ impl<'r> FromRequest<'r> for PublicToken {
         if time_now > claims.exp {
             err_handler!("Token expired");
         }
-        // Check if claims.iss is host|claims.scope[0]
-        let host = match auth::Host::from_request(request).await {
-            Outcome::Success(host) => host,
-            _ => err_handler!("Error getting Host"),
-        };
-        let complete_host = format!("{}|{}", host.host, claims.scope[0]);
+        // Check if claims.iss is domain|claims.scope[0]
+        let complete_host = format!("{}|{}", CONFIG.domain_origin(), claims.scope[0]);
         if complete_host != claims.iss {
             err_handler!("Token not issued by this server");
         }
