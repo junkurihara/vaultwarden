@@ -58,11 +58,11 @@ impl EmergencyAccess {
 
     pub fn to_json(&self) -> Value {
         json!({
-            "Id": self.uuid,
-            "Status": self.status,
-            "Type": self.atype,
-            "WaitTimeDays": self.wait_time_days,
-            "Object": "emergencyAccess",
+            "id": self.uuid,
+            "status": self.status,
+            "type": self.atype,
+            "waitTimeDays": self.wait_time_days,
+            "object": "emergencyAccess",
         })
     }
 
@@ -70,14 +70,14 @@ impl EmergencyAccess {
         let grantor_user = User::find_by_uuid(&self.grantor_uuid, conn).await.expect("Grantor user not found.");
 
         json!({
-            "Id": self.uuid,
-            "Status": self.status,
-            "Type": self.atype,
-            "WaitTimeDays": self.wait_time_days,
-            "GrantorId": grantor_user.uuid,
-            "Email": grantor_user.email,
-            "Name": grantor_user.name,
-            "Object": "emergencyAccessGrantorDetails",
+            "id": self.uuid,
+            "status": self.status,
+            "type": self.atype,
+            "waitTimeDays": self.wait_time_days,
+            "grantorId": grantor_user.uuid,
+            "email": grantor_user.email,
+            "name": grantor_user.name,
+            "object": "emergencyAccessGrantorDetails",
         })
     }
 
@@ -98,14 +98,14 @@ impl EmergencyAccess {
         };
 
         Some(json!({
-            "Id": self.uuid,
-            "Status": self.status,
-            "Type": self.atype,
-            "WaitTimeDays": self.wait_time_days,
-            "GranteeId": grantee_user.uuid,
-            "Email": grantee_user.email,
-            "Name": grantee_user.name,
-            "Object": "emergencyAccessGranteeDetails",
+            "id": self.uuid,
+            "status": self.status,
+            "type": self.atype,
+            "waitTimeDays": self.wait_time_days,
+            "granteeId": grantee_user.uuid,
+            "email": grantee_user.email,
+            "name": grantee_user.name,
+            "object": "emergencyAccessGranteeDetails",
         }))
     }
 }
@@ -238,15 +238,6 @@ impl EmergencyAccess {
         }}
     }
 
-    pub async fn find_by_uuid(uuid: &str, conn: &mut DbConn) -> Option<Self> {
-        db_run! { conn: {
-            emergency_access::table
-                .filter(emergency_access::uuid.eq(uuid))
-                .first::<EmergencyAccessDb>(conn)
-                .ok().from_db()
-        }}
-    }
-
     pub async fn find_by_grantor_uuid_and_grantee_uuid_or_email(
         grantor_uuid: &str,
         grantee_uuid: &str,
@@ -276,6 +267,26 @@ impl EmergencyAccess {
             emergency_access::table
                 .filter(emergency_access::uuid.eq(uuid))
                 .filter(emergency_access::grantor_uuid.eq(grantor_uuid))
+                .first::<EmergencyAccessDb>(conn)
+                .ok().from_db()
+        }}
+    }
+
+    pub async fn find_by_uuid_and_grantee_uuid(uuid: &str, grantee_uuid: &str, conn: &mut DbConn) -> Option<Self> {
+        db_run! { conn: {
+            emergency_access::table
+                .filter(emergency_access::uuid.eq(uuid))
+                .filter(emergency_access::grantee_uuid.eq(grantee_uuid))
+                .first::<EmergencyAccessDb>(conn)
+                .ok().from_db()
+        }}
+    }
+
+    pub async fn find_by_uuid_and_grantee_email(uuid: &str, grantee_email: &str, conn: &mut DbConn) -> Option<Self> {
+        db_run! { conn: {
+            emergency_access::table
+                .filter(emergency_access::uuid.eq(uuid))
+                .filter(emergency_access::email.eq(grantee_email))
                 .first::<EmergencyAccessDb>(conn)
                 .ok().from_db()
         }}
