@@ -1,4 +1,5 @@
 use once_cell::sync::Lazy;
+use reqwest::Method;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::env;
@@ -17,14 +18,14 @@ use crate::{
         core::{log_event, two_factor},
         unregister_push_device, ApiResult, EmptyResult, JsonResult, Notify,
     },
-    auth::{decode_admin, encode_jwt, generate_admin_claims, ClientIp},
+    auth::{decode_admin, encode_jwt, generate_admin_claims, ClientIp, Secure},
     config::ConfigBuilder,
     db::{backup_database, get_sql_server_version, models::*, DbConn, DbConnType},
     error::{Error, MapResult},
+    http_client::make_http_request,
     mail,
     util::{
-        container_base_image, format_naive_datetime_local, get_display_size, get_reqwest_client,
-        is_running_in_container, NumberOrString,
+        container_base_image, format_naive_datetime_local, get_display_size, is_running_in_container, NumberOrString,
     },
     CONFIG, VERSION,
 };
@@ -168,7 +169,12 @@ struct LoginForm {
 }
 
 #[post("/", data = "<data>")]
-fn post_admin_login(data: Form<LoginForm>, cookies: &CookieJar<'_>, ip: ClientIp) -> Result<Redirect, AdminResponse> {
+fn post_admin_login(
+    data: Form<LoginForm>,
+    cookies: &CookieJar<'_>,
+    ip: ClientIp,
+    secure: Secure,
+) -> Result<Redirect, AdminResponse> {
     let data = data.into_inner();
     let redirect = data.redirect;
 
@@ -192,7 +198,8 @@ fn post_admin_login(data: Form<LoginForm>, cookies: &CookieJar<'_>, ip: ClientIp
             .path(admin_path())
             .max_age(rocket::time::Duration::minutes(CONFIG.admin_session_lifetime()))
             .same_site(SameSite::Strict)
-            .http_only(true);
+            .http_only(true)
+            .secure(secure.https);
 
         cookies.add(cookie);
         if let Some(redirect) = redirect {
@@ -594,15 +601,15 @@ struct TimeApi {
 }
 
 async fn get_json_api<T: DeserializeOwned>(url: &str) -> Result<T, Error> {
-    let json_api = get_reqwest_client();
-
-    Ok(json_api.get(url).send().await?.error_for_status()?.json::<T>().await?)
+    Ok(make_http_request(Method::GET, url)?.send().await?.error_for_status()?.json::<T>().await?)
 }
 
 async fn has_http_access() -> bool {
-    let http_access = get_reqwest_client();
-
-    match http_access.head("https://github.com/dani-garcia/vaultwarden").send().await {
+    let req = match make_http_request(Method::HEAD, "https://github.com/dani-garcia/vaultwarden") {
+        Ok(r) => r,
+        Err(_) => return false,
+    };
+    match req.send().await {
         Ok(r) => r.status().is_success(),
         _ => false,
     }

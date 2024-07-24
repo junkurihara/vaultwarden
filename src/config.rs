@@ -146,6 +146,12 @@ macro_rules! make_config {
                 config.signups_domains_whitelist = config.signups_domains_whitelist.trim().to_lowercase();
                 config.org_creation_users = config.org_creation_users.trim().to_lowercase();
 
+
+                // Copy the values from the deprecated flags to the new ones
+                if config.http_request_block_regex.is_none() {
+                    config.http_request_block_regex = config.icon_blacklist_regex.clone();
+                }
+
                 config
             }
         }
@@ -537,12 +543,18 @@ make_config! {
         icon_cache_negttl:      u64,    true,   def,    259_200;
         /// Icon download timeout |> Number of seconds when to stop attempting to download an icon.
         icon_download_timeout:  u64,    true,   def,    10;
-        /// Icon blacklist Regex |> Any domains or IPs that match this regex won't be fetched by the icon service.
+
+        /// [Deprecated] Icon blacklist Regex |> Use `http_request_block_regex` instead
+        icon_blacklist_regex:   String, false,   option;
+        /// [Deprecated] Icon blacklist non global IPs |> Use `http_request_block_non_global_ips` instead
+        icon_blacklist_non_global_ips:  bool,   false,   def, true;
+
+        /// Block HTTP domains/IPs by Regex |> Any domains or IPs that match this regex won't be fetched by the internal HTTP client.
         /// Useful to hide other servers in the local network. Check the WIKI for more details
-        icon_blacklist_regex:   String, true,   option;
-        /// Icon blacklist non global IPs |> Any IP which is not defined as a global IP will be blacklisted.
+        http_request_block_regex:   String, true,   option;
+        /// Block non global IPs |> Enabling this will cause the internal HTTP client to refuse to connect to any non global IP address.
         /// Useful to secure your internal environment: See https://en.wikipedia.org/wiki/Reserved_IP_addresses for a list of IPs which it will block
-        icon_blacklist_non_global_ips:  bool,   true,   def,    true;
+        http_request_block_non_global_ips:  bool,   true,   auto, |c| c.icon_blacklist_non_global_ips;
 
         /// Disable Two-Factor remember |> Enabling this would force the users to use a second factor to login every time.
         /// Note that the checkbox would still be present, but ignored.
@@ -905,12 +917,12 @@ fn validate_config(cfg: &ConfigItems) -> Result<(), Error> {
         err!("To use email 2FA as automatic fallback, email 2fa has to be enabled!");
     }
 
-    // Check if the icon blacklist regex is valid
-    if let Some(ref r) = cfg.icon_blacklist_regex {
+    // Check if the HTTP request block regex is valid
+    if let Some(ref r) = cfg.http_request_block_regex {
         let validate_regex = regex::Regex::new(r);
         match validate_regex {
             Ok(_) => (),
-            Err(e) => err!(format!("`ICON_BLACKLIST_REGEX` is invalid: {e:#?}")),
+            Err(e) => err!(format!("`HTTP_REQUEST_BLOCK_REGEX` is invalid: {e:#?}")),
         }
     }
 
@@ -1271,7 +1283,6 @@ where
     hb.set_strict_mode(true);
     // Register helpers
     hb.register_helper("case", Box::new(case_helper));
-    hb.register_helper("jsesc", Box::new(js_escape_helper));
     hb.register_helper("to_json", Box::new(to_json));
 
     macro_rules! reg {
@@ -1329,14 +1340,7 @@ where
     // And then load user templates to overwrite the defaults
     // Use .hbs extension for the files
     // Templates get registered with their relative name
-    hb.register_templates_directory(
-        path,
-        DirectorySourceOptions {
-            tpl_extension: ".hbs".to_owned(),
-            ..Default::default()
-        },
-    )
-    .unwrap();
+    hb.register_templates_directory(path, DirectorySourceOptions::default()).unwrap();
 
     hb
 }
@@ -1357,32 +1361,6 @@ fn case_helper<'reg, 'rc>(
     } else {
         Ok(())
     }
-}
-
-fn js_escape_helper<'reg, 'rc>(
-    h: &Helper<'rc>,
-    _r: &'reg Handlebars<'_>,
-    _ctx: &'rc Context,
-    _rc: &mut RenderContext<'reg, 'rc>,
-    out: &mut dyn Output,
-) -> HelperResult {
-    let param =
-        h.param(0).ok_or_else(|| RenderErrorReason::Other(String::from("Param not found for helper \"jsesc\"")))?;
-
-    let no_quote = h.param(1).is_some();
-
-    let value = param
-        .value()
-        .as_str()
-        .ok_or_else(|| RenderErrorReason::Other(String::from("Param for helper \"jsesc\" is not a String")))?;
-
-    let mut escaped_value = value.replace('\\', "").replace('\'', "\\x22").replace('\"', "\\x27");
-    if !no_quote {
-        escaped_value = format!("&quot;{escaped_value}&quot;");
-    }
-
-    out.write(&escaped_value)?;
-    Ok(())
 }
 
 fn to_json<'reg, 'rc>(
