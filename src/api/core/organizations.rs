@@ -956,8 +956,7 @@ async fn send_invite(org_id: &str, data: Json<InviteData>, headers: AdminHeaders
             };
 
             mail::send_invite(
-                &email,
-                &user.uuid,
+                &user,
                 Some(String::from(org_id)),
                 Some(new_user.uuid),
                 &org_name,
@@ -1033,8 +1032,7 @@ async fn _reinvite_user(org_id: &str, user_org: &str, invited_by_email: &str, co
 
     if CONFIG.mail_enabled() {
         mail::send_invite(
-            &user.email,
-            &user.uuid,
+            &user,
             Some(org_id.to_string()),
             Some(user_org.uuid),
             &org_name,
@@ -1598,7 +1596,7 @@ async fn post_org_import(
     // Bitwarden does not process the import if there is one item invalid.
     // Since we check for the size of the encrypted note length, we need to do that here to pre-validate it.
     // TODO: See if we can optimize the whole cipher adding/importing and prevent duplicate code and checks.
-    Cipher::validate_notes(&data.ciphers)?;
+    Cipher::validate_cipher_data(&data.ciphers)?;
 
     let mut collections = Vec::new();
     for coll in data.collections {
@@ -1781,6 +1779,38 @@ async fn put_policy(
         Some(pt) => pt,
         None => err!("Invalid or unsupported policy type"),
     };
+
+    // Bitwarden only allows the Reset Password policy when Single Org policy is enabled
+    // Vaultwarden encouraged to use multiple orgs instead of groups because groups were not available in the past
+    // Now that groups are available we can enforce this option when wanted.
+    // We put this behind a config option to prevent breaking current installation.
+    // Maybe we want to enable this by default in the future, but currently it is disabled by default.
+    if CONFIG.enforce_single_org_with_reset_pw_policy() {
+        if pol_type_enum == OrgPolicyType::ResetPassword && data.enabled {
+            let single_org_policy_enabled =
+                match OrgPolicy::find_by_org_and_type(org_id, OrgPolicyType::SingleOrg, &mut conn).await {
+                    Some(p) => p.enabled,
+                    None => false,
+                };
+
+            if !single_org_policy_enabled {
+                err!("Single Organization policy is not enabled. It is mandatory for this policy to be enabled.")
+            }
+        }
+
+        // Also prevent the Single Org Policy to be disabled if the Reset Password policy is enabled
+        if pol_type_enum == OrgPolicyType::SingleOrg && !data.enabled {
+            let reset_pw_policy_enabled =
+                match OrgPolicy::find_by_org_and_type(org_id, OrgPolicyType::ResetPassword, &mut conn).await {
+                    Some(p) => p.enabled,
+                    None => false,
+                };
+
+            if reset_pw_policy_enabled {
+                err!("Account recovery policy is enabled. It is not allowed to disable this policy.")
+            }
+        }
+    }
 
     // When enabling the TwoFactorAuthentication policy, revoke all members that do not have 2FA
     if pol_type_enum == OrgPolicyType::TwoFactorAuthentication && data.enabled {
@@ -2005,8 +2035,7 @@ async fn import(org_id: &str, data: Json<OrgImportData>, headers: Headers, mut c
                     };
 
                     mail::send_invite(
-                        &user_data.email,
-                        &user.uuid,
+                        &user,
                         Some(String::from(org_id)),
                         Some(new_org_user.uuid),
                         &org_name,
