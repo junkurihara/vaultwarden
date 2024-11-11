@@ -161,7 +161,6 @@ impl Organization {
             "identifier": null, // not supported by us
             "name": self.name,
             "seats": null,
-            "maxAutoscaleSeats": null,
             "maxCollections": null,
             "maxStorageGb": i16::MAX, // The value doesn't matter, we don't check server-side
             "use2fa": true,
@@ -231,6 +230,14 @@ impl UserOrganization {
             return true;
         }
         false
+    }
+
+    /// Return the status of the user in an unrevoked state
+    pub fn get_unrevoked_status(&self) -> i32 {
+        if self.status <= UserOrgStatus::Revoked as i32 {
+            return self.status + ACTIVATE_REVOKE_DIFF;
+        }
+        self.status
     }
 
     pub fn set_external_id(&mut self, external_id: Option<String>) -> bool {
@@ -374,7 +381,6 @@ impl UserOrganization {
             "identifier": null, // Not supported
             "name": org.name,
             "seats": null,
-            "maxAutoscaleSeats": null,
             "maxCollections": null,
             "usersGetPremium": true,
             "use2fa": true,
@@ -411,7 +417,7 @@ impl UserOrganization {
             "familySponsorshipValidUntil": null,
             "familySponsorshipToDelete": null,
             "accessSecretsManager": false,
-            "limitCollectionCreationDeletion": true,
+            "limitCollectionCreationDeletion": false, // This should be set to true only when we can handle roles like createNewCollections
             "allowAdminAccessToAllCollectionItems": true,
             "flexibleCollections": false,
 
@@ -477,7 +483,7 @@ impl UserOrganization {
                 .into_iter()
                 .filter_map(|c| {
                     let (read_only, hide_passwords, can_manage) = if self.has_full_access() {
-                        (false, false, self.atype == UserOrgType::Manager)
+                        (false, false, self.atype >= UserOrgType::Manager)
                     } else if let Some(cu) = cu.get(&c.uuid) {
                         (
                             cu.read_only,
@@ -504,10 +510,29 @@ impl UserOrganization {
             Vec::with_capacity(0)
         };
 
+        let permissions = json!({
+            // TODO: Add support for Custom User Roles
+            // See: https://bitwarden.com/help/article/user-types-access-control/#custom-role
+            "accessEventLogs": false,
+            "accessImportExport": false,
+            "accessReports": false,
+            "createNewCollections": false,
+            "editAnyCollection": false,
+            "deleteAnyCollection": false,
+            "editAssignedCollections": false,
+            "deleteAssignedCollections": false,
+            "manageGroups": false,
+            "managePolicies": false,
+            "manageSso": false, // Not supported
+            "manageUsers": false,
+            "manageResetPassword": false,
+            "manageScim": false // Not supported (Not AGPLv3 Licensed)
+        });
+
         json!({
             "id": self.uuid,
             "userId": self.user_uuid,
-            "name": user.name,
+            "name": if self.get_unrevoked_status() >= UserOrgStatus::Accepted as i32 { Some(user.name) } else { None },
             "email": user.email,
             "externalId": self.external_id,
             "avatarColor": user.avatar_color,
@@ -519,6 +544,13 @@ impl UserOrganization {
             "accessAll": self.access_all,
             "twoFactorEnabled": twofactor_enabled,
             "resetPasswordEnrolled": self.reset_password_key.is_some(),
+            "hasMasterPassword": !user.password_hash.is_empty(),
+
+            "permissions": permissions,
+
+            "ssoBound": false, // Not supported
+            "usesKeyConnector": false, // Not supported
+            "accessSecretsManager": false, // Not supported (Not AGPLv3 Licensed)
 
             "object": "organizationUserUserDetails",
         })

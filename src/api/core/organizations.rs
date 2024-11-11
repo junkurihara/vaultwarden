@@ -358,11 +358,12 @@ async fn get_org_collections_details(org_id: &str, headers: ManagerHeadersLoose,
             Vec::with_capacity(0)
         };
 
-        let mut json_object = col.to_json();
+        let mut json_object = col.to_json_details(&headers.user.uuid, None, &mut conn).await;
         json_object["assigned"] = json!(assigned);
         json_object["users"] = json!(users);
         json_object["groups"] = json!(groups);
         json_object["object"] = json!("collectionAccessDetails");
+        json_object["unmanaged"] = json!(false);
         data.push(json_object)
     }
 
@@ -680,7 +681,7 @@ async fn get_org_collection_detail(
 
             let assigned = Collection::can_access_collection(&user_org, &collection.uuid, &mut conn).await;
 
-            let mut json_object = collection.to_json();
+            let mut json_object = collection.to_json_details(&headers.user.uuid, None, &mut conn).await;
             json_object["assigned"] = json!(assigned);
             json_object["users"] = json!(users);
             json_object["groups"] = json!(groups);
@@ -872,20 +873,19 @@ async fn send_invite(org_id: &str, data: Json<InviteData>, headers: AdminHeaders
     }
 
     for email in data.emails.iter() {
-        let email = email.to_lowercase();
         let mut user_org_status = UserOrgStatus::Invited as i32;
-        let user = match User::find_by_mail(&email, &mut conn).await {
+        let user = match User::find_by_mail(email, &mut conn).await {
             None => {
                 if !CONFIG.invitations_allowed() {
                     err!(format!("User does not exist: {email}"))
                 }
 
-                if !CONFIG.is_email_domain_allowed(&email) {
+                if !CONFIG.is_email_domain_allowed(email) {
                     err!("Email domain not eligible for invitations")
                 }
 
                 if !CONFIG.mail_enabled() {
-                    let invitation = Invitation::new(&email);
+                    let invitation = Invitation::new(email);
                     invitation.save(&mut conn).await?;
                 }
 

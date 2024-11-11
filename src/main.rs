@@ -38,8 +38,10 @@ use std::{
 use tokio::{
     fs::File,
     io::{AsyncBufReadExt, BufReader},
-    signal::unix::SignalKind,
 };
+
+#[cfg(unix)]
+use tokio::signal::unix::SignalKind;
 
 #[macro_use]
 mod error;
@@ -60,7 +62,7 @@ use crate::api::{WS_ANONYMOUS_SUBSCRIPTIONS, WS_USERS};
 pub use config::CONFIG;
 pub use error::{Error, MapResult};
 use rocket::data::{Limits, ToByteUnit};
-use std::sync::Arc;
+use std::sync::{atomic::Ordering, Arc};
 pub use util::is_running_in_container;
 
 #[rocket::main]
@@ -122,6 +124,7 @@ fn parse_args() {
         print!("{HELP}");
         exit(0);
     } else if pargs.contains(["-v", "--version"]) {
+        config::SKIP_CONFIG_VALIDATION.store(true, Ordering::Relaxed);
         let web_vault_version = util::get_web_vault_version();
         println!("Vaultwarden {version}");
         println!("Web-Vault {web_vault_version}");
@@ -383,7 +386,7 @@ fn init_logging() -> Result<log::LevelFilter, Error> {
         {
             logger = logger.chain(fern::log_file(log_file)?);
         }
-        #[cfg(not(windows))]
+        #[cfg(unix)]
         {
             const SIGHUP: i32 = SignalKind::hangup().as_raw_value();
             let path = Path::new(&log_file);
@@ -391,7 +394,7 @@ fn init_logging() -> Result<log::LevelFilter, Error> {
         }
     }
 
-    #[cfg(not(windows))]
+    #[cfg(unix)]
     {
         if cfg!(feature = "enable_syslog") || CONFIG.use_syslog() {
             logger = chain_syslog(logger);
@@ -441,7 +444,7 @@ fn init_logging() -> Result<log::LevelFilter, Error> {
     Ok(level)
 }
 
-#[cfg(not(windows))]
+#[cfg(unix)]
 fn chain_syslog(logger: fern::Dispatch) -> fern::Dispatch {
     let syslog_fmt = syslog::Formatter3164 {
         facility: syslog::Facility::LOG_USER,
@@ -513,10 +516,10 @@ async fn container_data_folder_is_persistent(data_folder: &str) -> bool {
             format!(" /{data_folder} ")
         };
         let mut lines = BufReader::new(mountinfo).lines();
+        let re = regex::Regex::new(r"/volumes/[a-z0-9]{64}/_data /").unwrap();
         while let Some(line) = lines.next_line().await.unwrap_or_default() {
             // Only execute a regex check if we find the base match
             if line.contains(&data_folder_match) {
-                let re = regex::Regex::new(r"/volumes/[a-z0-9]{64}/_data /").unwrap();
                 if re.is_match(&line) {
                     return false;
                 }

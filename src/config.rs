@@ -1,6 +1,9 @@
 use std::env::consts::EXE_SUFFIX;
 use std::process::exit;
-use std::sync::RwLock;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    RwLock,
+};
 
 use job_scheduler_ng::Schedule;
 use once_cell::sync::Lazy;
@@ -16,6 +19,8 @@ static CONFIG_FILE: Lazy<String> = Lazy::new(|| {
     let data_folder = get_env("DATA_FOLDER").unwrap_or_else(|| String::from("data"));
     get_env("CONFIG_FILE").unwrap_or_else(|| format!("{data_folder}/config.json"))
 });
+
+pub static SKIP_CONFIG_VALIDATION: AtomicBool = AtomicBool::new(false);
 
 pub static CONFIG: Lazy<Config> = Lazy::new(|| {
     Config::load().unwrap_or_else(|e| {
@@ -813,7 +818,7 @@ fn validate_config(cfg: &ConfigItems) -> Result<(), Error> {
 
     // TODO: deal with deprecated flags so they can be removed from this list, cf. #4263
     const KNOWN_FLAGS: &[&str] =
-        &["autofill-overlay", "autofill-v2", "browser-fileless-import", "fido2-vault-credentials"];
+        &["autofill-overlay", "autofill-v2", "browser-fileless-import", "extension-refresh", "fido2-vault-credentials"];
     let configured_flags = parse_experimental_client_feature_flags(&cfg.experimental_client_feature_flags);
     let invalid_flags: Vec<_> = configured_flags.keys().filter(|flag| !KNOWN_FLAGS.contains(&flag.as_str())).collect();
     if !invalid_flags.is_empty() {
@@ -1111,7 +1116,9 @@ impl Config {
 
         // Fill any missing with defaults
         let config = builder.build();
-        validate_config(&config)?;
+        if !SKIP_CONFIG_VALIDATION.load(Ordering::Relaxed) {
+            validate_config(&config)?;
+        }
 
         Ok(Config {
             inner: RwLock::new(Inner {
