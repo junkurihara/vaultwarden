@@ -30,6 +30,7 @@ pub fn routes() -> Vec<rocket::Route> {
         profile,
         put_profile,
         post_profile,
+        put_avatar,
         get_public_keys,
         post_keys,
         post_password,
@@ -42,9 +43,8 @@ pub fn routes() -> Vec<rocket::Route> {
         post_verify_email_token,
         post_delete_recover,
         post_delete_recover_token,
-        post_device_token,
-        delete_account,
         post_delete_account,
+        delete_account,
         revision_date,
         password_hint,
         prelogin,
@@ -52,7 +52,9 @@ pub fn routes() -> Vec<rocket::Route> {
         api_key,
         rotate_api_key,
         get_known_device,
-        put_avatar,
+        get_all_devices,
+        get_device,
+        post_device_token,
         put_device_token,
         put_clear_device_token,
         post_clear_device_token,
@@ -79,7 +81,7 @@ pub struct RegisterData {
     name: Option<String>,
     token: Option<String>,
     #[allow(dead_code)]
-    organization_user_id: Option<String>,
+    organization_user_id: Option<MembershipId>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -106,15 +108,15 @@ fn enforce_password_hint_setting(password_hint: &Option<String>) -> EmptyResult 
     }
     Ok(())
 }
-async fn is_email_2fa_required(org_user_uuid: Option<String>, conn: &mut DbConn) -> bool {
+async fn is_email_2fa_required(member_id: Option<MembershipId>, conn: &mut DbConn) -> bool {
     if !CONFIG._enable_email_2fa() {
         return false;
     }
     if CONFIG.email_2fa_enforce_on_verified_invite() {
         return true;
     }
-    if org_user_uuid.is_some() {
-        return OrgPolicy::is_enabled_for_member(&org_user_uuid.unwrap(), OrgPolicyType::TwoFactorAuthentication, conn)
+    if member_id.is_some() {
+        return OrgPolicy::is_enabled_for_member(&member_id.unwrap(), OrgPolicyType::TwoFactorAuthentication, conn)
             .await;
     }
     false
@@ -161,9 +163,9 @@ pub async fn _register(data: Json<RegisterData>, mut conn: DbConn) -> JsonResult
                     err!("Registration email does not match invite email")
                 }
             } else if Invitation::take(&email, &mut conn).await {
-                for user_org in UserOrganization::find_invited_by_user(&user.uuid, &mut conn).await.iter_mut() {
-                    user_org.status = UserOrgStatus::Accepted as i32;
-                    user_org.save(&mut conn).await?;
+                for membership in Membership::find_invited_by_user(&user.uuid, &mut conn).await.iter_mut() {
+                    membership.status = MembershipStatus::Accepted as i32;
+                    membership.save(&mut conn).await?;
                 }
                 user
             } else if CONFIG.is_signup_allowed(&email)
@@ -305,9 +307,9 @@ async fn put_avatar(data: Json<AvatarData>, headers: Headers, mut conn: DbConn) 
     Ok(Json(user.to_json(&mut conn).await))
 }
 
-#[get("/users/<uuid>/public-key")]
-async fn get_public_keys(uuid: &str, _headers: Headers, mut conn: DbConn) -> JsonResult {
-    let user = match User::find_by_uuid(uuid, &mut conn).await {
+#[get("/users/<user_id>/public-key")]
+async fn get_public_keys(user_id: UserId, _headers: Headers, mut conn: DbConn) -> JsonResult {
+    let user = match User::find_by_uuid(&user_id, &mut conn).await {
         Some(user) if user.public_key.is_some() => user,
         Some(_) => err_code!("User has no public_key", Status::NotFound.code),
         None => err_code!("User doesn't exist", Status::NotFound.code),
@@ -366,7 +368,12 @@ async fn post_password(data: Json<ChangePassData>, headers: Headers, mut conn: D
         &data.new_master_password_hash,
         Some(data.key),
         true,
-        Some(vec![String::from("post_rotatekey"), String::from("get_contacts"), String::from("get_public_keys")]),
+        Some(vec![
+            String::from("post_rotatekey"),
+            String::from("get_contacts"),
+            String::from("get_public_keys"),
+            String::from("get_api_webauthn"),
+        ]),
     );
 
     let save_result = user.save(&mut conn).await;
@@ -374,7 +381,7 @@ async fn post_password(data: Json<ChangePassData>, headers: Headers, mut conn: D
     // Prevent logging out the client where the user requested this endpoint from.
     // If you do logout the user it will causes issues at the client side.
     // Adding the device uuid will prevent this.
-    nt.send_logout(&user, Some(headers.device.uuid)).await;
+    nt.send_logout(&user, Some(headers.device.uuid.clone())).await;
 
     save_result
 }
@@ -434,7 +441,7 @@ async fn post_kdf(data: Json<ChangeKdfData>, headers: Headers, mut conn: DbConn,
     user.set_password(&data.new_master_password_hash, Some(data.key), true, None);
     let save_result = user.save(&mut conn).await;
 
-    nt.send_logout(&user, Some(headers.device.uuid)).await;
+    nt.send_logout(&user, Some(headers.device.uuid.clone())).await;
 
     save_result
 }
@@ -445,21 +452,21 @@ struct UpdateFolderData {
     // There is a bug in 2024.3.x which adds a `null` item.
     // To bypass this we allow a Option here, but skip it during the updates
     // See: https://github.com/bitwarden/clients/issues/8453
-    id: Option<String>,
+    id: Option<FolderId>,
     name: String,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct UpdateEmergencyAccessData {
-    id: String,
+    id: EmergencyAccessId,
     key_encrypted: String,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct UpdateResetPasswordData {
-    organization_id: String,
+    organization_id: OrganizationId,
     reset_password_key: String,
 }
 
@@ -484,48 +491,49 @@ fn validate_keydata(
     existing_ciphers: &[Cipher],
     existing_folders: &[Folder],
     existing_emergency_access: &[EmergencyAccess],
-    existing_user_orgs: &[UserOrganization],
+    existing_memberships: &[Membership],
     existing_sends: &[Send],
 ) -> EmptyResult {
     // Check that we're correctly rotating all the user's ciphers
-    let existing_cipher_ids = existing_ciphers.iter().map(|c| c.uuid.as_str()).collect::<HashSet<_>>();
+    let existing_cipher_ids = existing_ciphers.iter().map(|c| &c.uuid).collect::<HashSet<&CipherId>>();
     let provided_cipher_ids = data
         .ciphers
         .iter()
         .filter(|c| c.organization_id.is_none())
-        .filter_map(|c| c.id.as_deref())
-        .collect::<HashSet<_>>();
+        .filter_map(|c| c.id.as_ref())
+        .collect::<HashSet<&CipherId>>();
     if !provided_cipher_ids.is_superset(&existing_cipher_ids) {
         err!("All existing ciphers must be included in the rotation")
     }
 
     // Check that we're correctly rotating all the user's folders
-    let existing_folder_ids = existing_folders.iter().map(|f| f.uuid.as_str()).collect::<HashSet<_>>();
-    let provided_folder_ids = data.folders.iter().filter_map(|f| f.id.as_deref()).collect::<HashSet<_>>();
+    let existing_folder_ids = existing_folders.iter().map(|f| &f.uuid).collect::<HashSet<&FolderId>>();
+    let provided_folder_ids = data.folders.iter().filter_map(|f| f.id.as_ref()).collect::<HashSet<&FolderId>>();
     if !provided_folder_ids.is_superset(&existing_folder_ids) {
         err!("All existing folders must be included in the rotation")
     }
 
     // Check that we're correctly rotating all the user's emergency access keys
     let existing_emergency_access_ids =
-        existing_emergency_access.iter().map(|ea| ea.uuid.as_str()).collect::<HashSet<_>>();
+        existing_emergency_access.iter().map(|ea| &ea.uuid).collect::<HashSet<&EmergencyAccessId>>();
     let provided_emergency_access_ids =
-        data.emergency_access_keys.iter().map(|ea| ea.id.as_str()).collect::<HashSet<_>>();
+        data.emergency_access_keys.iter().map(|ea| &ea.id).collect::<HashSet<&EmergencyAccessId>>();
     if !provided_emergency_access_ids.is_superset(&existing_emergency_access_ids) {
         err!("All existing emergency access keys must be included in the rotation")
     }
 
     // Check that we're correctly rotating all the user's reset password keys
-    let existing_reset_password_ids = existing_user_orgs.iter().map(|uo| uo.org_uuid.as_str()).collect::<HashSet<_>>();
+    let existing_reset_password_ids =
+        existing_memberships.iter().map(|m| &m.org_uuid).collect::<HashSet<&OrganizationId>>();
     let provided_reset_password_ids =
-        data.reset_password_keys.iter().map(|rp| rp.organization_id.as_str()).collect::<HashSet<_>>();
+        data.reset_password_keys.iter().map(|rp| &rp.organization_id).collect::<HashSet<&OrganizationId>>();
     if !provided_reset_password_ids.is_superset(&existing_reset_password_ids) {
         err!("All existing reset password keys must be included in the rotation")
     }
 
     // Check that we're correctly rotating all the user's sends
-    let existing_send_ids = existing_sends.iter().map(|s| s.uuid.as_str()).collect::<HashSet<_>>();
-    let provided_send_ids = data.sends.iter().filter_map(|s| s.id.as_deref()).collect::<HashSet<_>>();
+    let existing_send_ids = existing_sends.iter().map(|s| &s.uuid).collect::<HashSet<&SendId>>();
+    let provided_send_ids = data.sends.iter().filter_map(|s| s.id.as_ref()).collect::<HashSet<&SendId>>();
     if !provided_send_ids.is_superset(&existing_send_ids) {
         err!("All existing sends must be included in the rotation")
     }
@@ -548,24 +556,24 @@ async fn post_rotatekey(data: Json<KeyData>, headers: Headers, mut conn: DbConn,
     // TODO: See if we can optimize the whole cipher adding/importing and prevent duplicate code and checks.
     Cipher::validate_cipher_data(&data.ciphers)?;
 
-    let user_uuid = &headers.user.uuid;
+    let user_id = &headers.user.uuid;
 
     // TODO: Ideally we'd do everything after this point in a single transaction.
 
-    let mut existing_ciphers = Cipher::find_owned_by_user(user_uuid, &mut conn).await;
-    let mut existing_folders = Folder::find_by_user(user_uuid, &mut conn).await;
-    let mut existing_emergency_access = EmergencyAccess::find_all_by_grantor_uuid(user_uuid, &mut conn).await;
-    let mut existing_user_orgs = UserOrganization::find_by_user(user_uuid, &mut conn).await;
+    let mut existing_ciphers = Cipher::find_owned_by_user(user_id, &mut conn).await;
+    let mut existing_folders = Folder::find_by_user(user_id, &mut conn).await;
+    let mut existing_emergency_access = EmergencyAccess::find_all_by_grantor_uuid(user_id, &mut conn).await;
+    let mut existing_memberships = Membership::find_by_user(user_id, &mut conn).await;
     // We only rotate the reset password key if it is set.
-    existing_user_orgs.retain(|uo| uo.reset_password_key.is_some());
-    let mut existing_sends = Send::find_by_user(user_uuid, &mut conn).await;
+    existing_memberships.retain(|m| m.reset_password_key.is_some());
+    let mut existing_sends = Send::find_by_user(user_id, &mut conn).await;
 
     validate_keydata(
         &data,
         &existing_ciphers,
         &existing_folders,
         &existing_emergency_access,
-        &existing_user_orgs,
+        &existing_memberships,
         &existing_sends,
     )?;
 
@@ -597,14 +605,14 @@ async fn post_rotatekey(data: Json<KeyData>, headers: Headers, mut conn: DbConn,
 
     // Update reset password data
     for reset_password_data in data.reset_password_keys {
-        let Some(user_org) =
-            existing_user_orgs.iter_mut().find(|uo| uo.org_uuid == reset_password_data.organization_id)
+        let Some(membership) =
+            existing_memberships.iter_mut().find(|m| m.org_uuid == reset_password_data.organization_id)
         else {
             err!("Reset password doesn't exist")
         };
 
-        user_org.reset_password_key = Some(reset_password_data.reset_password_key);
-        user_org.save(&mut conn).await?
+        membership.reset_password_key = Some(reset_password_data.reset_password_key);
+        membership.save(&mut conn).await?
     }
 
     // Update send data
@@ -645,7 +653,7 @@ async fn post_rotatekey(data: Json<KeyData>, headers: Headers, mut conn: DbConn,
     // Prevent logging out the client where the user requested this endpoint from.
     // If you do logout the user it will causes issues at the client side.
     // Adding the device uuid will prevent this.
-    nt.send_logout(&user, Some(headers.device.uuid)).await;
+    nt.send_logout(&user, Some(headers.device.uuid.clone())).await;
 
     save_result
 }
@@ -792,7 +800,7 @@ async fn post_verify_email(headers: Headers) -> EmptyResult {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct VerifyEmailTokenData {
-    user_id: String,
+    user_id: UserId,
     token: String,
 }
 
@@ -807,7 +815,7 @@ async fn post_verify_email_token(data: Json<VerifyEmailTokenData>, mut conn: DbC
     let Ok(claims) = decode_verify_email(&data.token) else {
         err!("Invalid claim")
     };
-    if claims.sub != user.uuid {
+    if claims.sub != *user.uuid {
         err!("Invalid claim");
     }
     user.verified_at = Some(Utc::now().naive_utc());
@@ -849,7 +857,7 @@ async fn post_delete_recover(data: Json<DeleteRecoverData>, mut conn: DbConn) ->
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct DeleteRecoverTokenData {
-    user_id: String,
+    user_id: UserId,
     token: String,
 }
 
@@ -865,7 +873,7 @@ async fn post_delete_recover_token(data: Json<DeleteRecoverTokenData>, mut conn:
         err!("User doesn't exist")
     };
 
-    if claims.sub != user.uuid {
+    if claims.sub != *user.uuid {
         err!("Invalid claim");
     }
     user.delete(&mut conn).await
@@ -1027,7 +1035,7 @@ async fn get_known_device(device: KnownDevice, mut conn: DbConn) -> JsonResult {
 
 struct KnownDevice {
     email: String,
-    uuid: String,
+    uuid: DeviceId,
 }
 
 #[rocket::async_trait]
@@ -1050,7 +1058,7 @@ impl<'r> FromRequest<'r> for KnownDevice {
         };
 
         let uuid = if let Some(uuid) = req.headers().get_one("X-Device-Identifier") {
-            uuid.to_string()
+            uuid.to_string().into()
         } else {
             return Outcome::Error((Status::BadRequest, "X-Device-Identifier value is required"));
         };
@@ -1062,32 +1070,57 @@ impl<'r> FromRequest<'r> for KnownDevice {
     }
 }
 
+#[get("/devices")]
+async fn get_all_devices(headers: Headers, mut conn: DbConn) -> JsonResult {
+    let devices = Device::find_with_auth_request_by_user(&headers.user.uuid, &mut conn).await;
+    let devices = devices.iter().map(|device| device.to_json()).collect::<Vec<Value>>();
+
+    Ok(Json(json!({
+        "data": devices,
+        "continuationToken": null,
+        "object": "list"
+    })))
+}
+
+#[get("/devices/identifier/<device_id>")]
+async fn get_device(device_id: DeviceId, headers: Headers, mut conn: DbConn) -> JsonResult {
+    let Some(device) = Device::find_by_uuid_and_user(&device_id, &headers.user.uuid, &mut conn).await else {
+        err!("No device found");
+    };
+    Ok(Json(device.to_json()))
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PushToken {
     push_token: String,
 }
 
-#[post("/devices/identifier/<uuid>/token", data = "<data>")]
-async fn post_device_token(uuid: &str, data: Json<PushToken>, headers: Headers, conn: DbConn) -> EmptyResult {
-    put_device_token(uuid, data, headers, conn).await
+#[post("/devices/identifier/<device_id>/token", data = "<data>")]
+async fn post_device_token(device_id: DeviceId, data: Json<PushToken>, headers: Headers, conn: DbConn) -> EmptyResult {
+    put_device_token(device_id, data, headers, conn).await
 }
 
-#[put("/devices/identifier/<uuid>/token", data = "<data>")]
-async fn put_device_token(uuid: &str, data: Json<PushToken>, headers: Headers, mut conn: DbConn) -> EmptyResult {
+#[put("/devices/identifier/<device_id>/token", data = "<data>")]
+async fn put_device_token(
+    device_id: DeviceId,
+    data: Json<PushToken>,
+    headers: Headers,
+    mut conn: DbConn,
+) -> EmptyResult {
     let data = data.into_inner();
     let token = data.push_token;
 
     let Some(mut device) = Device::find_by_uuid_and_user(&headers.device.uuid, &headers.user.uuid, &mut conn).await
     else {
-        err!(format!("Error: device {uuid} should be present before a token can be assigned"))
+        err!(format!("Error: device {device_id} should be present before a token can be assigned"))
     };
 
     // if the device already has been registered
     if device.is_registered() {
         // check if the new token is the same as the registered token
         if device.push_token.is_some() && device.push_token.unwrap() == token.clone() {
-            debug!("Device {} is already registered and token is the same", uuid);
+            debug!("Device {} is already registered and token is the same", device_id);
             return Ok(());
         } else {
             // Try to unregister already registered device
@@ -1106,8 +1139,8 @@ async fn put_device_token(uuid: &str, data: Json<PushToken>, headers: Headers, m
     Ok(())
 }
 
-#[put("/devices/identifier/<uuid>/clear-token")]
-async fn put_clear_device_token(uuid: &str, mut conn: DbConn) -> EmptyResult {
+#[put("/devices/identifier/<device_id>/clear-token")]
+async fn put_clear_device_token(device_id: DeviceId, mut conn: DbConn) -> EmptyResult {
     // This only clears push token
     // https://github.com/bitwarden/core/blob/master/src/Api/Controllers/DevicesController.cs#L109
     // https://github.com/bitwarden/core/blob/master/src/Core/Services/Implementations/DeviceService.cs#L37
@@ -1116,8 +1149,8 @@ async fn put_clear_device_token(uuid: &str, mut conn: DbConn) -> EmptyResult {
         return Ok(());
     }
 
-    if let Some(device) = Device::find_by_uuid(uuid, &mut conn).await {
-        Device::clear_push_token_by_uuid(uuid, &mut conn).await?;
+    if let Some(device) = Device::find_by_uuid(&device_id, &mut conn).await {
+        Device::clear_push_token_by_uuid(&device_id, &mut conn).await?;
         unregister_push_device(device.push_uuid).await?;
     }
 
@@ -1125,16 +1158,16 @@ async fn put_clear_device_token(uuid: &str, mut conn: DbConn) -> EmptyResult {
 }
 
 // On upstream server, both PUT and POST are declared. Implementing the POST method in case it would be useful somewhere
-#[post("/devices/identifier/<uuid>/clear-token")]
-async fn post_clear_device_token(uuid: &str, conn: DbConn) -> EmptyResult {
-    put_clear_device_token(uuid, conn).await
+#[post("/devices/identifier/<device_id>/clear-token")]
+async fn post_clear_device_token(device_id: DeviceId, conn: DbConn) -> EmptyResult {
+    put_clear_device_token(device_id, conn).await
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AuthRequestRequest {
     access_code: String,
-    device_identifier: String,
+    device_identifier: DeviceId,
     email: String,
     public_key: String,
     // Not used for now
@@ -1188,16 +1221,17 @@ async fn post_auth_request(
     })))
 }
 
-#[get("/auth-requests/<uuid>")]
-async fn get_auth_request(uuid: &str, headers: Headers, mut conn: DbConn) -> JsonResult {
-    let Some(auth_request) = AuthRequest::find_by_uuid_and_user(uuid, &headers.user.uuid, &mut conn).await else {
+#[get("/auth-requests/<auth_request_id>")]
+async fn get_auth_request(auth_request_id: AuthRequestId, headers: Headers, mut conn: DbConn) -> JsonResult {
+    let Some(auth_request) = AuthRequest::find_by_uuid_and_user(&auth_request_id, &headers.user.uuid, &mut conn).await
+    else {
         err!("AuthRequest doesn't exist", "Record not found or user uuid does not match")
     };
 
     let response_date_utc = auth_request.response_date.map(|response_date| format_date(&response_date));
 
     Ok(Json(json!({
-        "id": uuid,
+        "id": &auth_request_id,
         "publicKey": auth_request.public_key,
         "requestDeviceType": DeviceType::from_i32(auth_request.device_type).to_string(),
         "requestIpAddress": auth_request.request_ip,
@@ -1214,15 +1248,15 @@ async fn get_auth_request(uuid: &str, headers: Headers, mut conn: DbConn) -> Jso
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AuthResponseRequest {
-    device_identifier: String,
+    device_identifier: DeviceId,
     key: String,
     master_password_hash: Option<String>,
     request_approved: bool,
 }
 
-#[put("/auth-requests/<uuid>", data = "<data>")]
+#[put("/auth-requests/<auth_request_id>", data = "<data>")]
 async fn put_auth_request(
-    uuid: &str,
+    auth_request_id: AuthRequestId,
     data: Json<AuthResponseRequest>,
     headers: Headers,
     mut conn: DbConn,
@@ -1230,7 +1264,9 @@ async fn put_auth_request(
     nt: Notify<'_>,
 ) -> JsonResult {
     let data = data.into_inner();
-    let Some(mut auth_request) = AuthRequest::find_by_uuid_and_user(uuid, &headers.user.uuid, &mut conn).await else {
+    let Some(mut auth_request) =
+        AuthRequest::find_by_uuid_and_user(&auth_request_id, &headers.user.uuid, &mut conn).await
+    else {
         err!("AuthRequest doesn't exist", "Record not found or user uuid does not match")
     };
 
@@ -1250,14 +1286,14 @@ async fn put_auth_request(
         auth_request.save(&mut conn).await?;
 
         ant.send_auth_response(&auth_request.user_uuid, &auth_request.uuid).await;
-        nt.send_auth_response(&auth_request.user_uuid, &auth_request.uuid, data.device_identifier, &mut conn).await;
+        nt.send_auth_response(&auth_request.user_uuid, &auth_request.uuid, &data.device_identifier, &mut conn).await;
     } else {
         // If denied, there's no reason to keep the request
         auth_request.delete(&mut conn).await?;
     }
 
     Ok(Json(json!({
-        "id": uuid,
+        "id": &auth_request_id,
         "publicKey": auth_request.public_key,
         "requestDeviceType": DeviceType::from_i32(auth_request.device_type).to_string(),
         "requestIpAddress": auth_request.request_ip,
@@ -1271,14 +1307,14 @@ async fn put_auth_request(
     })))
 }
 
-#[get("/auth-requests/<uuid>/response?<code>")]
+#[get("/auth-requests/<auth_request_id>/response?<code>")]
 async fn get_auth_request_response(
-    uuid: &str,
+    auth_request_id: AuthRequestId,
     code: &str,
     client_headers: ClientHeaders,
     mut conn: DbConn,
 ) -> JsonResult {
-    let Some(auth_request) = AuthRequest::find_by_uuid(uuid, &mut conn).await else {
+    let Some(auth_request) = AuthRequest::find_by_uuid(&auth_request_id, &mut conn).await else {
         err!("AuthRequest doesn't exist", "User not found")
     };
 
@@ -1292,7 +1328,7 @@ async fn get_auth_request_response(
     let response_date_utc = auth_request.response_date.map(|response_date| format_date(&response_date));
 
     Ok(Json(json!({
-        "id": uuid,
+        "id": &auth_request_id,
         "publicKey": auth_request.public_key,
         "requestDeviceType": DeviceType::from_i32(auth_request.device_type).to_string(),
         "requestIpAddress": auth_request.request_ip,
