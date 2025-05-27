@@ -181,6 +181,11 @@ pub struct LoginJwtClaims {
     pub sstamp: String,
     // device uuid
     pub device: DeviceId,
+    // what kind of device, like FirefoxBrowser or Android derived from DeviceType
+    pub devicetype: String,
+    // the type of client_id, like web, cli, desktop, browser or mobile
+    pub client_id: String,
+
     // [ "api", "offline_access" ]
     pub scope: Vec<String>,
     // [ "Application" ]
@@ -289,7 +294,7 @@ pub fn generate_organization_api_key_login_claims(
         exp: (time_now + TimeDelta::try_hours(1).unwrap()).timestamp(),
         iss: JWT_ORG_API_KEY_ISSUER.to_string(),
         sub: org_api_key_uuid,
-        client_id: format!("organization.{}", org_id),
+        client_id: format!("organization.{org_id}"),
         client_sub: org_id,
         scope: vec!["api.organization".into()],
     }
@@ -547,7 +552,7 @@ impl<'r> FromRequest<'r> for Headers {
                     let mut user = user;
                     user.reset_stamp_exception();
                     if let Err(e) = user.save(&mut conn).await {
-                        error!("Error updating user: {:#?}", e);
+                        error!("Error updating user: {e:#?}");
                     }
                     err_handler!("Stamp exception is expired")
                 } else if !stamp_exception.routes.contains(&current_route.to_string()) {
@@ -685,17 +690,6 @@ impl<'r> FromRequest<'r> for AdminHeaders {
             })
         } else {
             err_handler!("You need to be Admin or Owner to call this endpoint")
-        }
-    }
-}
-
-impl From<AdminHeaders> for Headers {
-    fn from(h: AdminHeaders) -> Headers {
-        Headers {
-            host: h.host,
-            device: h.device,
-            user: h.user,
-            ip: h.ip,
         }
     }
 }
@@ -869,8 +863,10 @@ impl<'r> FromRequest<'r> for OwnerHeaders {
 
 pub struct OrgMemberHeaders {
     pub host: String,
+    pub device: Device,
     pub user: User,
-    pub org_id: OrganizationId,
+    pub membership: Membership,
+    pub ip: ClientIp,
 }
 
 #[rocket::async_trait]
@@ -882,11 +878,24 @@ impl<'r> FromRequest<'r> for OrgMemberHeaders {
         if headers.is_member() {
             Outcome::Success(Self {
                 host: headers.host,
+                device: headers.device,
                 user: headers.user,
-                org_id: headers.membership.org_uuid,
+                membership: headers.membership,
+                ip: headers.ip,
             })
         } else {
             err_handler!("You need to be a Member of the Organization to call this endpoint")
+        }
+    }
+}
+
+impl From<OrgMemberHeaders> for Headers {
+    fn from(h: OrgMemberHeaders) -> Headers {
+        Headers {
+            host: h.host,
+            device: h.device,
+            user: h.user,
+            ip: h.ip,
         }
     }
 }
@@ -911,7 +920,7 @@ impl<'r> FromRequest<'r> for ClientIp {
                     None => ip,
                 }
                 .parse()
-                .map_err(|_| warn!("'{}' header is malformed: {}", CONFIG.ip_header(), ip))
+                .map_err(|_| warn!("'{}' header is malformed: {ip}", CONFIG.ip_header()))
                 .ok()
             })
         } else {
