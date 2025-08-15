@@ -54,7 +54,7 @@ use rocket::error::Error as RocketErr;
 use serde_json::{Error as SerdeErr, Value};
 use std::io::Error as IoErr;
 use std::time::SystemTimeError as TimeErr;
-use webauthn_rs::error::WebauthnError as WebauthnErr;
+use webauthn_rs::prelude::WebauthnError as WebauthnErr;
 use yubico::yubicoerror::YubicoError as YubiErr;
 
 #[derive(Serialize)]
@@ -158,6 +158,10 @@ impl Error {
 
     pub fn get_event(&self) -> &Option<ErrorEvent> {
         &self.event
+    }
+
+    pub fn message(&self) -> &str {
+        &self.message
     }
 }
 
@@ -278,8 +282,14 @@ macro_rules! err_silent {
     ($msg:expr) => {{
         return Err($crate::error::Error::new($msg, $msg));
     }};
+    ($msg:expr, ErrorEvent $err_event:tt) => {{
+        return Err($crate::error::Error::new($msg, $msg).with_event($crate::error::ErrorEvent $err_event));
+    }};
     ($usr_msg:expr, $log_value:expr) => {{
         return Err($crate::error::Error::new($usr_msg, $log_value));
+    }};
+    ($usr_msg:expr, $log_value:expr, ErrorEvent $err_event:tt) => {{
+        return Err($crate::error::Error::new($usr_msg, $log_value).with_event($crate::error::ErrorEvent $err_event));
     }};
 }
 
