@@ -339,7 +339,7 @@ async fn get_user_collections(headers: Headers, mut conn: DbConn) -> Json<Value>
 }
 
 // Called during the SSO enrollment
-// The `identifier` should be the value returned by `get_org_domain_sso_details`
+// The `identifier` should be the value returned by `get_org_domain_sso_verified`
 // The returned `Id` will then be passed to `get_master_password_policy` which will mainly ignore it
 #[get("/organizations/<identifier>/auto-enroll-status")]
 async fn get_auto_enroll_status(identifier: &str, headers: Headers, mut conn: DbConn) -> JsonResult {
@@ -349,7 +349,7 @@ async fn get_auto_enroll_status(identifier: &str, headers: Headers, mut conn: Db
             None => None,
         }
     } else {
-        Organization::find_by_name(identifier, &mut conn).await
+        Organization::find_by_uuid(&identifier.into(), &mut conn).await
     };
 
     let (id, identifier, rp_auto_enroll) = match org {
@@ -977,17 +977,17 @@ async fn get_org_domain_sso_verified(data: Json<OrgDomainDetails>, mut conn: DbC
     let identifiers = match Organization::find_org_user_email(&data.email, &mut conn)
         .await
         .into_iter()
-        .map(|o| o.name)
-        .collect::<Vec<String>>()
+        .map(|o| (o.name, o.uuid.to_string()))
+        .collect::<Vec<(String, String)>>()
     {
         v if !v.is_empty() => v,
-        _ => vec![crate::sso::FAKE_IDENTIFIER.to_string()],
+        _ => vec![(crate::sso::FAKE_IDENTIFIER.to_string(), crate::sso::FAKE_IDENTIFIER.to_string())],
     };
 
     Ok(Json(json!({
         "object": "list",
-        "data": identifiers.into_iter().map(|identifier| json!({
-            "organizationName": identifier,     // appear unused
+        "data": identifiers.into_iter().map(|(name, identifier)| json!({
+            "organizationName": name,           // appear unused
             "organizationIdentifier": identifier,
             "domainName": CONFIG.domain(),      // appear unused
         })).collect::<Vec<Value>>()
@@ -2063,12 +2063,12 @@ async fn list_policies_token(org_id: OrganizationId, token: &str, mut conn: DbCo
 async fn get_master_password_policy(org_id: OrganizationId, _headers: Headers, mut conn: DbConn) -> JsonResult {
     let policy =
         OrgPolicy::find_by_org_and_type(&org_id, OrgPolicyType::MasterPassword, &mut conn).await.unwrap_or_else(|| {
-            let data = match CONFIG.sso_master_password_policy() {
-                Some(policy) => policy,
-                None => "null".to_string(),
+            let (enabled, data) = match CONFIG.sso_master_password_policy_value() {
+                Some(policy) if CONFIG.sso_enabled() => (true, policy.to_string()),
+                _ => (false, "null".to_string()),
             };
 
-            OrgPolicy::new(org_id, OrgPolicyType::MasterPassword, CONFIG.sso_master_password_policy().is_some(), data)
+            OrgPolicy::new(org_id, OrgPolicyType::MasterPassword, enabled, data)
         });
 
     Ok(Json(policy.to_json()))
