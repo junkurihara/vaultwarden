@@ -17,6 +17,7 @@ fn get_argon2_config(iterations: u32, memory: u32, parallelism: u32) -> Config<'
         mem_cost: memory,
         time_cost: iterations,
         lanes: parallelism,
+        thread_mode: rust_argon2::ThreadMode::Parallel,
         secret: &[],
         ad: &[],
         hash_length: OUTPUT_LEN as u32,
@@ -85,7 +86,7 @@ pub fn get_random_bytes<const N: usize>() -> [u8; N] {
 }
 
 /// Encode random bytes using the provided function.
-pub fn encode_random_bytes<const N: usize>(e: Encoding) -> String {
+pub fn encode_random_bytes<const N: usize>(e: &Encoding) -> String {
     e.encode(&get_random_bytes::<N>())
 }
 
@@ -118,7 +119,7 @@ pub fn get_random_string_alphanum(num_chars: usize) -> String {
 }
 
 pub fn generate_id<const N: usize>() -> String {
-    encode_random_bytes::<N>(HEXLOWER)
+    encode_random_bytes::<N>(&HEXLOWER)
 }
 
 pub fn generate_send_file_id() -> String {
