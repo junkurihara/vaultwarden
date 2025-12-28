@@ -564,9 +564,9 @@ make_config! {
         /// Duo Auth context cleanup schedule |> Cron schedule of the job that cleans expired Duo contexts from the database. Does nothing if Duo MFA is disabled or set to use the legacy iframe prompt.
         /// Defaults to once every minute. Set blank to disable this job.
         duo_context_purge_schedule:   String, false,  def,    "30 * * * * *".to_string();
-        /// Purge incomplete SSO nonce. |> Cron schedule of the job that cleans leftover nonce in db due to incomplete SSO login.
+        /// Purge incomplete SSO auth. |> Cron schedule of the job that cleans leftover auth in db due to incomplete SSO login.
         /// Defaults to daily. Set blank to disable this job.
-        purge_incomplete_sso_nonce: String, false,  def,   "0 20 0 * * *".to_string();
+        purge_incomplete_sso_auth: String, false,  def,   "0 20 0 * * *".to_string();
     },
 
     /// General settings
@@ -795,6 +795,10 @@ make_config! {
         /// Bitwarden enforces this by default. In Vaultwarden we encouraged to use multiple organizations because groups were not available.
         /// Setting this to true will enforce the Single Org Policy to be enabled before you can enable the Reset Password policy.
         enforce_single_org_with_reset_pw_policy: bool, false, def, false;
+
+        /// Prefer IPv6 (AAAA) resolving |> This settings configures the DNS resolver to resolve IPv6 first, and if not available try IPv4
+        /// This could be useful in IPv6 only environments.
+        dns_prefer_ipv6: bool, true, def, false;
     },
 
     /// OpenID Connect SSO settings
@@ -1041,6 +1045,7 @@ fn validate_config(cfg: &ConfigItems) -> Result<(), Error> {
         "ssh-agent",
         // Key Management Team
         "ssh-key-vault-item",
+        "pm-25373-windows-biometrics-v2",
         // Tools
         "export-attachments",
         // Mobile Team
