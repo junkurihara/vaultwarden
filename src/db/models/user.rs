@@ -71,6 +71,8 @@ pub struct User {
     pub avatar_color: Option<String>,
 
     pub external_id: Option<String>, // Todo: Needs to be removed in the future, this is not used anymore.
+
+    pub key_id: Option<KeyId>,
 }
 
 #[derive(Identifiable, Queryable, Insertable)]
@@ -158,6 +160,8 @@ impl User {
             avatar_color: None,
 
             external_id: None, // Todo: Needs to be removed in the future, this is not used anymore.
+
+            key_id: None,
         }
     }
 
@@ -269,22 +273,13 @@ impl User {
 
 /// Database methods
 impl User {
-    pub async fn to_json(&self, conn: &DbConn) -> Value {
-        let mut orgs_json = Vec::new();
-        for c in Membership::find_confirmed_by_user(&self.uuid, conn).await {
-            orgs_json.push(c.to_json(conn).await);
-        }
+    pub fn verified(&self) -> bool {
+        !CONFIG.mail_enabled() || self.verified_at.is_some()
+    }
 
-        let twofactor_enabled = !TwoFactor::find_by_user(&self.uuid, conn).await.is_empty();
-
-        // TODO: Might want to save the status field in the DB
-        let status = if self.password_hash.is_empty() {
-            UserStatus::Invited
-        } else {
-            UserStatus::Enabled
-        };
-
-        let account_keys = if self.private_key.is_some() {
+    /// The `accountKeys` object (upstream's `PrivateKeysResponseModel`), null without a key pair
+    pub fn account_keys_json(&self) -> Value {
+        if self.private_key.is_some() {
             json!({
                 "publicKeyEncryptionKeyPair": {
                     "wrappedPrivateKey": self.private_key,
@@ -298,7 +293,30 @@ impl User {
             })
         } else {
             Value::Null
+        }
+    }
+
+    pub async fn to_json(&self, conn: &DbConn) -> Value {
+        let mut orgs_json = Vec::new();
+        for c in Membership::find_confirmed_by_user(&self.uuid, conn).await {
+            orgs_json.push(c.to_json(conn).await);
+        }
+
+        let mut orgs_new_json = Vec::new();
+        for c in Membership::find_accepted_and_confirmed_by_user(&self.uuid, conn).await {
+            orgs_new_json.push(c.to_json(conn).await);
+        }
+
+        let twofactor_enabled = !TwoFactor::find_by_user(&self.uuid, conn).await.is_empty();
+
+        // TODO: Might want to save the status field in the DB
+        let status = if self.password_hash.is_empty() {
+            UserStatus::Invited
+        } else {
+            UserStatus::Enabled
         };
+
+        let account_keys = self.account_keys_json();
 
         json!({
             "_status": status as i32,
@@ -306,7 +324,7 @@ impl User {
             "id": self.uuid,
             "name": self.name,
             "email": self.email,
-            "emailVerified": !CONFIG.mail_enabled() || self.verified_at.is_some(),
+            "emailVerified": self.verified(),
             "premium": true,
             "premiumFromOrganization": false,
             "culture": "en-US",
@@ -315,6 +333,7 @@ impl User {
             "privateKey": self.private_key,
             "securityStamp": self.security_stamp,
             "organizations": orgs_json,
+            "organizationsNew": orgs_new_json,
             "providers": [],
             "providerOrganizations": [],
             "forcePasswordReset": false,
@@ -327,7 +346,7 @@ impl User {
 
     pub async fn save(&mut self, conn: &DbConn) -> EmptyResult {
         if !crate::util::is_valid_email(&self.email) {
-            err!(format!("User email {} is not a valid email address", self.email))
+            err!(format!("User email {} is not a valid email address", self.email.escape_debug()))
         }
 
         self.updated_at = Utc::now().naive_utc();
@@ -475,7 +494,7 @@ impl Invitation {
 
     pub async fn save(&self, conn: &DbConn) -> EmptyResult {
         if !crate::util::is_valid_email(&self.email) {
-            err!(format!("Invitation email {} is not a valid email address", self.email))
+            err!(format!("Invitation email {} is not a valid email address", self.email.escape_debug()))
         }
 
         db_run! { conn:
@@ -542,6 +561,26 @@ impl Invitation {
 #[deref(forward)]
 #[from(forward)]
 pub struct UserId(String);
+
+#[derive(
+    Clone,
+    Debug,
+    DieselNewType,
+    FromForm,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    AsRef,
+    Deref,
+    Display,
+    From,
+    UuidFromParam,
+)]
+#[deref(forward)]
+#[from(forward)]
+pub struct KeyId(String);
 
 impl SsoUser {
     pub async fn save(&self, conn: &DbConn) -> EmptyResult {
